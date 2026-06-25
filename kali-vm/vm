@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_DIR="/var/lib/libvirt/images"
+SNAPSHOT_NAME="post-setup"
+export LIBVIRT_DEFAULT_URI="qemu:///system"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  vm create [name]           Create Kali VM and run i3 setup (default: kali-base)
+  vm clone <src> <new>       Clone an existing VM disk to <new>
+  vm reset <name>            Revert VM to snapshot "post-setup"
+  vm ip <name>               Show VM IPv4 (if known by libvirt)
+  vm delete <name>           Destroy/undefine VM and remove qcow2 disk
+EOF
+}
+
+cmd="${1:-}"
+
+case "${cmd}" in
+create)
+    name="${2:-kali-base}"
+    exec "${SCRIPT_DIR}/kali-libvirt-setup.sh" "${name}"
+    ;;
+clone)
+    src="${2:-}"
+    new="${3:-}"
+    [[ -n "${src}" && -n "${new}" ]] || { usage; exit 1; }
+    exec virt-clone --original "${src}" --name "${new}" --file "${IMAGE_DIR}/${new}.qcow2"
+    ;;
+reset)
+    name="${2:-}"
+    [[ -n "${name}" ]] || { usage; exit 1; }
+    exec virsh snapshot-revert "${name}" "${SNAPSHOT_NAME}"
+    ;;
+ip)
+    name="${2:-}"
+    [[ -n "${name}" ]] || { usage; exit 1; }
+    ip_addr="$(virsh domifaddr "${name}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1)"
+    if [[ -n "${ip_addr}" ]]; then
+        echo "${ip_addr}"
+        exit 0
+    fi
+
+    vm_mac="$(virsh domiflist "${name}" 2>/dev/null | awk '/network/ && $5 ~ /:/ {print $5; exit}')"
+    if [[ -n "${vm_mac}" ]]; then
+        ip_addr="$(virsh net-dhcp-leases default 2>/dev/null | awk -v mac="${vm_mac}" '$0 ~ mac {print $5}' | cut -d/ -f1 | head -n1)"
+    fi
+    if [[ -n "${ip_addr}" ]]; then
+        echo "${ip_addr}"
+        exit 0
+    fi
+
+    if [[ -n "${vm_mac}" ]]; then
+        ip_addr="$(ip neigh 2>/dev/null | awk -v mac="${vm_mac}" 'tolower($0) ~ tolower(mac) {print $1; exit}')"
+    fi
+    if [[ -n "${ip_addr}" ]]; then
+        echo "${ip_addr}"
+        exit 0
+    fi
+
+    echo "No IP found for '${name}' (domifaddr, DHCP lease, ARP)."
+    exit 1
+    ;;
+delete)
+    name="${2:-}"
+    [[ -n "${name}" ]] || { usage; exit 1; }
+    virsh destroy "${name}" >/dev/null 2>&1 || true
+    virsh undefine "${name}" >/dev/null 2>&1 || true
+    sudo rm -f "${IMAGE_DIR}/${name}.qcow2"
+    echo "Deleted VM '${name}' and disk '${IMAGE_DIR}/${name}.qcow2'."
+    ;;
+help|-h|--help|"")
+    usage
+    ;;
+*)
+    usage
+    exit 1
+    ;;
+esac
