@@ -23,7 +23,7 @@ pomdock docker exec                                   # plain shell
 pomdock docker exec --vpn ~/mullvad/de-ber-001.conf  # WireGuard/OpenVPN kill-switch
 pomdock docker exec --whonix                          # transparent Tor routing
 pomdock docker exec --whonix --vpn ~/tap.conf         # Tor in, VPN out
-pomdock docker exec --name nordea --vpn ~/tap.conf    # named engagement
+pomdock docker exec --name myengagement --vpn ~/tap.conf    # named engagement
 
 pomdock docker status
 pomdock docker stop   [--name NAME]
@@ -50,7 +50,9 @@ Your dotfiles are baked into the image at build time and mounted live at runtime
 
 Inside the container `~/pcm.dot` is a symlink to `~/dotfiles`, so relative paths in your configs work the same way. Changes on the host are immediately visible without rebuilding.
 
-If `setup-shell.sh` exists in your dotfiles dir, it runs during build to install shell tooling (zsh plugins, atuin, starship, etc.). If `atuin/bin/atuin` exists in the dotfiles dir, it gets used instead of downloading from upstream.
+If `setup-shell.sh` exists in your dotfiles dir, it runs during build to install shell tooling (zsh plugins, atuin, starship, etc.).
+
+The image ships a custom-built atuin binary (`bin/atuin`) that shows absolute timestamps instead of relative ones. If your dotfiles include their own `atuin/bin/atuin`, that takes priority. Falls back to the upstream installer if neither is present.
 
 ### Network stacks
 
