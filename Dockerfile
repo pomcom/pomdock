@@ -47,6 +47,11 @@ ENV STARSHIP_CONFIG=/home/$USERNAME/dotfiles/starship/.config/starship-pentest.t
 # Mounted at runtime to the same path — see pentest.sh (PENTEST_DOTFILES_DIR).
 COPY --from=dotfiles --chown=$USERNAME:$USERNAME . /home/$USERNAME/dotfiles/
 
+# ── Bundled atuin binary (custom build with absolute timestamps) ───
+# setup-shell.sh will use this if no dotfiles/atuin/bin/atuin is present.
+# Falls back to upstream installer if this file is missing (unlikely).
+COPY --chown=$USERNAME:$USERNAME bin/atuin /home/$USERNAME/.atuin/bin/atuin
+
 # ── Pentest tools — single source of truth: setup-pentest.sh ──────
 RUN bash /tmp/setup-pentest.sh
 
