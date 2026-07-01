@@ -46,10 +46,10 @@ pomdock vm create [name]       # download Kali QEMU, provision, snapshot
 pomdock vm list
 pomdock vm start / stop / ssh / rdp / console / reset / clone / delete / ip <name>
 
-# Whonix Gateway — route VM traffic through Tor
-pomdock vm whonix-gateway              # download + import official Whonix KVM image (~2.2 GB)
-pomdock vm whonix-attach <name>
-pomdock vm whonix-detach <name>
+# Whonix Gateway — route VM traffic through Tor (one-time import ~2.2 GB)
+pomdock vm whonix-gateway              # download + import official Whonix KVM image
+pomdock vm whonix-attach <name>        # configure Tor routing inside VM
+pomdock vm whonix-detach <name>        # restore plain routing
 ```
 
 ### TUI keys
@@ -80,14 +80,30 @@ pomdock vm whonix-detach <name>
 
 Kali shares the sidecar's network namespace. gluetun enforces an iptables kill-switch — traffic is blocked if the VPN drops. Named engagements (`--name`) get separate sidecars and a separate loot dir at `~/pentest/<name>`.
 
+**DNS per mode:**
+- **plain** — inherits host resolver (router/ISP DNS, no tunnel)
+- **vpn** — gluetun runs unbound with DNS-over-TLS through the VPN tunnel; nameserver is `127.0.0.1` inside the container
+- **whonix** — nameserver `127.0.0.1`; DNS forwarded via socat → Tor DNSPort; all DNS exits via Tor
+- **stack (Tor → VPN)** — same as whonix DNS; HTTP and DNS both exit via the VPN
+
 ### VMs
 
-| Command | Stack |
-|---------|-------|
-| `pomdock vm ssh <name>` | plain libvirt NAT |
-| `pomdock vm whonix-attach <name>` | Kali VM → Whonix Gateway → Tor |
+| State | Stack |
+|-------|-------|
+| plain | libvirt NAT → host egress |
+| after `whonix-attach` | Kali VM → Whonix Gateway (10.152.152.10) → Tor |
 
-Whonix Gateway uses static IP `10.152.152.10` on the internal bridge. After attach, all VM traffic (including DNS) routes through Tor. SOCKS5 also available at `10.152.152.10:9050`.
+**Whonix first-time setup:**
+1. `pomdock vm whonix-gateway` — downloads and imports the official Whonix KVM image (~2.2 GB, one-time)
+2. Start the target VM: `pomdock vm start <name>`
+3. `pomdock vm whonix-attach <name>` — hotplugs a second NIC on the Whonix-Internal bridge, configures static IP `10.152.152.100/18` on `eth1`, sets default route via `10.152.152.10`, and sets DNS to `10.152.152.10` (Tor-proxied). Management NIC (`eth0 / 192.168.122.x`) stays up for SSH/RDP.
+4. Wait ~2 min on first Whonix boot for Tor to fully bootstrap before traffic flows.
+
+**DNS in VM+Whonix:** nameserver `10.152.152.10` — the Whonix Gateway proxies all DNS through Tor. Direct UDP to external nameservers is blocked by the Whonix firewall (by design — this is not a leak, it's a feature).
+
+**VPN in VMs:** `wireguard-tools`, `openvpn`, `openresolv`, and `mullvad-vpn` are installed during VM provisioning. Configure and connect manually after `pomdock vm ssh <name>`. WireGuard through libvirt NAT may have handshake issues depending on the host NAT config — use the Docker `--vpn` mode for automated VPN management.
+
+**SOCKS5 proxy** (VM+Whonix): `10.152.152.10:9050` — usable from any app that supports SOCKS5 without full transparent routing.
 
 ---
 
@@ -103,7 +119,7 @@ pomdock docker build
 
 ## Testing
 
-Each test prints: egress IP (curl), network interfaces, routes, DNS resolver, DNS leak check, and Tor status.
+Each test prints: egress IP (curl), network interfaces, routes, DNS resolver, DNS leak check, and Tor status — so you can confirm the correct IP is in use and there is no DNS leak.
 
 ```bash
 ./test-build.sh                        # build → tool checks → teardown
@@ -115,12 +131,17 @@ Each test prints: egress IP (curl), network interfaces, routes, DNS resolver, DN
 ./test-network.sh --vpn ~/tap.conf --whonix              # all Docker modes
 
 # VM (VM must be running; Whonix-Gateway must be running for --vm-whonix)
-./test-network.sh --vm kali-base                         # VM plain
-./test-network.sh --vm kali-base --vm-whonix             # VM via Tor
+./test-network.sh --vm kali-base                         # VM in current state
+./test-network.sh --vm kali-base --vm-whonix             # VM + Tor via Whonix Gateway
 
 # Everything
 ./test-network.sh --vpn ~/tap.conf --whonix --vm kali-base --vm-whonix
 ```
+
+**Expected warnings (not real leaks):**
+- **VPN mode** — DNS egress IP ≠ HTTP egress IP: gluetun's DoT resolver exits from the WireGuard peer IP (not the assigned exit IP). Different IP, same tunnel. Expected.
+- **VM+Whonix DNS leak check** — "No response from Google NS": Whonix blocks direct UDP to external nameservers. DNS still routes through Tor via `10.152.152.10`. Expected.
+- **VM+Whonix DNS resolver** — "Nameserver is private IP (10.152.152.10)": this is the Whonix Gateway; DNS is Tor-proxied. Expected.
 
 ---
 
