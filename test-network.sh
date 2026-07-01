@@ -196,7 +196,10 @@ start_whonix() {
 
     info "Waiting for Tor bootstrap..."
     local i
-    for i in $(seq 1 90); do
+    # Stack mode (Tor through VPN) can take longer to find guard nodes
+    local max_wait=90
+    [[ -n "$net_arg" ]] && max_wait=150
+    for i in $(seq 1 $max_wait); do
         if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q true; then
             err "Whonix gateway exited: $(docker logs --tail 5 "$name" 2>&1 | tr '\n' ' ')"
             return 1
@@ -209,7 +212,7 @@ start_whonix() {
         sleep 1
     done
     echo ""
-    err "Tor bootstrap timed out — docker logs $name"
+    err "Tor bootstrap timed out after ${max_wait}s — docker logs $name"
     return 1
 }
 
@@ -222,6 +225,7 @@ set -uo pipefail
 
 MODE="${1:-unknown}"
 EXPECTED_TOR="${2:-false}"
+EXPECT_DNS_TUNNEL="${3:-false}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; RESET='\033[0m'
 INNER_PASS=0; INNER_FAIL=0
@@ -282,7 +286,11 @@ elif [[ "$NS" == "127."* ]]; then
 elif [[ "$NS" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.) ]]; then
     warn "Nameserver is private IP ($NS) — DNS via internal gateway (may or may not be torified)"
 else
-    fail "Nameserver is public IP ($NS) — DNS NOT routed through tunnel (DNS LEAK)"
+    if [[ "$EXPECT_DNS_TUNNEL" == "true" ]]; then
+        fail "Nameserver is public IP ($NS) — DNS NOT routed through tunnel (DNS LEAK)"
+    else
+        warn "Nameserver is public IP ($NS) — DNS direct (no tunnel in plain mode)"
+    fi
 fi
 
 if command -v dig &>/dev/null; then
@@ -305,8 +313,10 @@ if command -v dig &>/dev/null; then
     if [[ -n "$DNS_EGRESS" && -n "$EGRESS_IP" ]]; then
         if [[ "$DNS_EGRESS" == "$EGRESS_IP" ]]; then
             pass "DNS egress matches HTTP egress ($EGRESS_IP) — no DNS leak"
-        elif [[ "$EXPECTED_TOR" == "true" ]]; then
-            warn "DNS egress ($DNS_EGRESS) ≠ HTTP egress ($EGRESS_IP) — Tor may use different exit nodes for each (normal)"
+        elif [[ "$EXPECTED_TOR" == "true" || "$EXPECT_DNS_TUNNEL" == "true" ]]; then
+            # Tor uses different exit nodes per circuit; VPN DoT exits from WireGuard
+            # peer IP (not the assigned exit IP) — both are expected, not a real leak
+            warn "DNS egress ($DNS_EGRESS) ≠ HTTP egress ($EGRESS_IP) — different exit per circuit (normal for Tor/VPN DoT)"
         else
             fail "DNS egress ($DNS_EGRESS) ≠ HTTP egress ($EGRESS_IP) — potential DNS leak"
         fi
@@ -354,6 +364,7 @@ run_check() {
     local mode_label="$1"
     local net_arg="${2:-}"    # container:<name> or empty for plain bridge
     local expected_tor="$3"
+    local expect_dns_tunnel="${4:-false}"
 
     echo ""
     echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
@@ -368,8 +379,17 @@ run_check() {
     )
     [[ -n "$net_arg" ]] && run_args+=(--network "$net_arg")
 
+    # Whonix mode: point DNS at socat bridge on 127.0.0.1:53 inside the sidecar.
+    # --dns is not supported with --network container:X, so we mount a temp file.
+    if [[ "$net_arg" == container:*whonix* ]]; then
+        local tmp_resolv
+        tmp_resolv=$(mktemp)
+        printf 'nameserver 127.0.0.1\n' > "$tmp_resolv"
+        run_args+=(-v "${tmp_resolv}:/etc/resolv.conf:ro")
+    fi
+
     local exit_code=0
-    docker run "${run_args[@]}" "$IMAGE" bash /tmp/netcheck.sh "$mode_label" "$expected_tor" \
+    docker run "${run_args[@]}" "$IMAGE" bash /tmp/netcheck.sh "$mode_label" "$expected_tor" "$expect_dns_tunnel" \
         || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -434,7 +454,7 @@ info "Modes to run:$(
 # ── plain ─────────────────────────────────────────────────────────
 
 if [[ "$RUN_PLAIN" == true ]]; then
-    run_check "plain — Docker bridge" "" "false"
+    run_check "plain — Docker bridge" "" "false" "false"
 fi
 
 # ── vpn ──────────────────────────────────────────────────────────
@@ -442,7 +462,7 @@ fi
 if [[ "$RUN_VPN" == true ]]; then
     GT="${RUN_ID}-gluetun"
     if start_gluetun "$VPN_FILE" "$GT"; then
-        run_check "vpn — Kali → gluetun → VPN" "container:$GT" "false"
+        run_check "vpn — Kali → gluetun → VPN" "container:$GT" "false" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$GT"
     else
         MODE_RESULTS+=("${RED}✗${RESET} vpn — sidecar failed to start")
@@ -455,7 +475,7 @@ fi
 if [[ "$RUN_WHONIX" == true ]]; then
     WN="${RUN_ID}-whonix"
     if start_whonix "$WN" ""; then
-        run_check "whonix — Kali → Tor" "container:$WN" "true"
+        run_check "whonix — Kali → Tor" "container:$WN" "true" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN"
     else
         MODE_RESULTS+=("${RED}✗${RESET} whonix — sidecar failed to start")
@@ -470,7 +490,7 @@ if [[ "$RUN_STACK" == true ]]; then
     WN="${RUN_ID}-stack-whonix"
     if start_gluetun "$VPN_FILE" "$GT" && start_whonix "$WN" "container:$GT"; then
         # Stack: Tor exits via the VPN, so check.torproject.org sees the VPN exit (IsTor=false)
-        run_check "stack — Kali → Tor → VPN" "container:$WN" "false"
+        run_check "stack — Kali → Tor → VPN" "container:$WN" "false" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN" "$GT"
     else
         teardown_stack "$WN" "$GT"
