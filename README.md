@@ -22,7 +22,7 @@ pomdock docker build
 pomdock docker exec                                   # plain shell
 pomdock docker exec --vpn ~/mullvad/de-ber-001.conf  # WireGuard/OpenVPN kill-switch
 pomdock docker exec --whonix                          # transparent Tor routing
-pomdock docker exec --whonix --vpn ~/tap.conf         # Tor in, VPN out
+pomdock docker exec --whonix --vpn ~/tap.conf         # Tor over VPN (Tor circuits through VPN tunnel)
 pomdock docker exec --name myengagement --vpn ~/tap.conf    # named engagement
 
 pomdock docker status
@@ -60,8 +60,8 @@ The image ships a custom-built atuin binary (`bin/atuin`) that shows absolute ti
 |-------|------|
 | *(none)* | Docker bridge |
 | `--vpn FILE` | Kali -> gluetun -> VPN |
-| `--whonix` | Kali -> Tor gateway |
-| `--whonix --vpn FILE` | Kali -> Tor -> VPN |
+| `--whonix` | Kali -> Tor |
+| `--whonix --vpn FILE` | Kali -> Tor over VPN (Tor circuits through VPN) |
 
 Kali shares the sidecar's network namespace. gluetun enforces an iptables kill-switch so traffic is blocked if the VPN drops.
 
