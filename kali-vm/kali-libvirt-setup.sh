@@ -5,10 +5,13 @@
 set -euo pipefail
 export LIBVIRT_DEFAULT_URI="qemu:///system"
 
-KALI_VERSION="2026.1"
+KALI_VERSION="$(curl -s https://cdimage.kali.org/current/ \
+    | grep -oP 'kali-linux-\K[0-9]+\.[0-9]+(?=-qemu-amd64\.7z)' | head -1)"
+[[ -z "$KALI_VERSION" ]] && { echo "✗ Could not detect current Kali version from cdimage.kali.org"; exit 1; }
 KALI_IMAGE="kali-linux-${KALI_VERSION}-qemu-amd64"
 KALI_URL="https://cdimage.kali.org/current/${KALI_IMAGE}.7z"
 IMAGE_DIR="/var/lib/libvirt/images"
+DOWNLOAD_DIR="${POMDOCK_DOWNLOAD_DIR:-${HOME}/.cache/pomdock}"
 VM_NAME="${1:-kali-base}"
 VM_DISK="${IMAGE_DIR}/${VM_NAME}.qcow2"
 VM_RAM=16384
@@ -32,19 +35,36 @@ if [[ ! -f "${KALI_KEY}" ]] && ! command -v sshpass >/dev/null 2>&1; then
     exit 1
 fi
 
+# ── Sudo — prompt once upfront, keep alive during long download/extract ───────
+
+echo "→ Requesting sudo credentials (needed for disk install later)..."
+sudo -v
+# Refresh every 60s in the background so the timestamp doesn't expire
+( while true; do sudo -v; sleep 60; done ) &
+SUDO_KEEPER=$!
+trap 'kill "${SUDO_KEEPER}" 2>/dev/null || true' EXIT
+
 # ── Download ──────────────────────────────────────────────────────────────────
 
+mkdir -p "${DOWNLOAD_DIR}"
+KALI_7Z="${DOWNLOAD_DIR}/${KALI_IMAGE}.7z"
+KALI_QCOW2="${DOWNLOAD_DIR}/${KALI_IMAGE}.qcow2"
+
 echo "→ Downloading Kali ${KALI_VERSION} QEMU image..."
-cd /tmp
-if [[ ! -f "${KALI_IMAGE}.qcow2" ]]; then
-    wget -c "${KALI_URL}" -O "${KALI_IMAGE}.7z"
-    7z x "${KALI_IMAGE}.7z"
+echo "  Destination: ${DOWNLOAD_DIR}  (override with POMDOCK_DOWNLOAD_DIR)"
+
+if [[ ! -f "${KALI_QCOW2}" ]]; then
+    wget -c "${KALI_URL}" -O "${KALI_7Z}"
+    echo "→ Extracting..."
+    7z x "${KALI_7Z}" -o"${DOWNLOAD_DIR}"
+    echo "→ Removing archive..."
+    rm -f "${KALI_7Z}"
 fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
 echo "→ Installing VM disk to ${VM_DISK} (${VM_DISK_SIZE})..."
-sudo qemu-img convert -f qcow2 -O qcow2 "${KALI_IMAGE}.qcow2" "${VM_DISK}"
+sudo qemu-img convert -f qcow2 -O qcow2 "${KALI_QCOW2}" "${VM_DISK}"
 sudo qemu-img resize "${VM_DISK}" "${VM_DISK_SIZE}"
 sudo chown libvirt-qemu:libvirt-qemu "${VM_DISK}" 2>/dev/null || true
 
@@ -209,14 +229,31 @@ echo "→ Copying and running kali-i3-setup.sh..."
     "echo ${KALI_PASSWORD} | sudo -S bash ~/kali-i3-setup.sh"
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
+# Internal snapshot (no --disk-only): reliable for virsh snapshot-revert.
+# VM must be shut off first — external/disk-only snapshots can't be reverted cleanly.
 
-echo "→ Creating post-setup snapshot..."
+echo "→ Shutting down VM for clean snapshot..."
+virsh shutdown "${VM_NAME}" >/dev/null 2>&1 || true
+for i in $(seq 1 60); do
+    [[ "$(virsh domstate "${VM_NAME}" 2>/dev/null)" == "shut off" ]] && break
+    sleep 2
+done
+if [[ "$(virsh domstate "${VM_NAME}" 2>/dev/null)" != "shut off" ]]; then
+    echo "  VM did not shut down cleanly — forcing off..."
+    virsh destroy "${VM_NAME}" >/dev/null 2>&1 || true
+    sleep 2
+fi
+
+echo "→ Creating post-setup snapshot (internal)..."
 if virsh snapshot-info "${VM_NAME}" post-setup >/dev/null 2>&1; then
-    virsh snapshot-delete "${VM_NAME}" post-setup --metadata >/dev/null 2>&1 || true
+    virsh snapshot-delete "${VM_NAME}" post-setup >/dev/null 2>&1 || true
 fi
 virsh snapshot-create-as "${VM_NAME}" post-setup \
-    --disk-only --atomic \
-    --description "Kali ${KALI_VERSION} — i3 + pentest tools ready"
+    --description "Kali ${KALI_VERSION} — i3 + pentest tools ready" \
+    --atomic
+
+echo "→ Starting VM..."
+virsh start "${VM_NAME}" >/dev/null
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
@@ -226,14 +263,10 @@ cat <<EOF
 
 VM:        ${VM_NAME}
 IP:        ${VM_IP}
-Snapshot:  post-setup (disk-only, survives reboots)
-RDP:       xfreerdp /v:${VM_IP} /u:kali /dynamic-resolution /gfx:avc444 +clipboard /cert:tofu
-SSH:       ssh kali@${VM_IP}  (key: ~/.ssh/kali)
+Snapshot:  post-setup
 
-Clone for a new lab:
-  virt-clone --original ${VM_NAME} --name kali-lab-1 \\
-    --file ${IMAGE_DIR}/kali-lab-1.qcow2
-
-Revert to clean state:
-  virsh snapshot-revert ${VM_NAME} post-setup
+  vm ssh ${VM_NAME}          # SSH
+  vm rdp ${VM_NAME}          # RDP (xfreerdp3)
+  vm reset ${VM_NAME}        # revert to clean state
+  vm clone ${VM_NAME} <new>  # clone for new lab
 EOF

@@ -2,3 +2,7 @@ tools/
 CLAUDE.md
 recon.md
 TODO.md
+
+# compiled binaries — build from source (see cli/Makefile)
+kali-vm/vm
+cli/pomdock

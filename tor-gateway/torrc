@@ -1,5 +1,7 @@
 User tor
 DataDirectory /var/lib/tor
+SocksPort 0.0.0.0:9050
+SocksPolicy accept *
 TransPort 0.0.0.0:9040
 DNSPort 0.0.0.0:5353
 AutomapHostsOnResolve 1
