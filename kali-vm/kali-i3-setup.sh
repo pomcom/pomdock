@@ -9,6 +9,10 @@ set -euo pipefail
 echo "→ Updating package lists..."
 sudo apt-get update -qq
 
+# Passwordless sudo for kali user — needed for automated provisioning and pomdock scripts
+echo 'kali ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/kali-nopasswd
+sudo chmod 440 /etc/sudoers.d/kali-nopasswd
+
 echo "→ Installing i3, XFCE4, and base packages..."
 sudo apt-get install -y \
     i3 i3status rofi picom feh \
@@ -16,13 +20,25 @@ sudo apt-get install -y \
     alacritty \
     fonts-firacode \
     xrdp openssh-server \
-    tmux zsh curl git wget jq net-tools dnsutils whois \
+    tmux zsh curl git wget jq net-tools dnsutils whois wireguard-tools openvpn openresolv \
     python3-pip python3-venv pipx \
     build-essential libssl-dev libffi-dev \
     nmap gobuster feroxbuster nikto smbclient \
     enum4linux onesixtyone ldap-utils \
     wordlists \
     zsh-syntax-highlighting zsh-autosuggestions
+
+# ── Mullvad VPN ───────────────────────────────────────────────────────────────
+
+echo "→ Installing Mullvad VPN..."
+if ! command -v mullvad &>/dev/null; then
+    curl -fsSL https://repository.mullvad.net/deb/mullvad-keyring.asc \
+        | sudo gpg --dearmor -o /usr/share/keyrings/mullvad-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/mullvad-keyring.gpg arch=$(dpkg --print-architecture)] https://repository.mullvad.net/deb/stable $(lsb_release -cs) main" \
+        | sudo tee /etc/apt/sources.list.d/mullvad.list
+    sudo apt-get update -qq
+    sudo apt-get install -y mullvad-vpn
+fi
 
 # ── Sublime Text ──────────────────────────────────────────────────────────────
 

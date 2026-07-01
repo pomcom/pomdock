@@ -130,7 +130,7 @@ func dhcpSearch(mac string) string {
 
 func vmHasWhonixNIC(name string) bool {
 	out, _ := virsh("domiflist", name)
-	return strings.Contains(out, "Whonix_internal")
+	return strings.Contains(out, "Whonix-Internal")
 }
 
 func VMExists(name string) bool {
@@ -143,7 +143,22 @@ func NetworkExists(net string) bool {
 	return err == nil
 }
 
-func StartVM(name string) error   { _, err := virsh("start", name); return err }
+// WhonixGatewayIP returns the Whonix Gateway's internal IP.
+// This is hardcoded in all Whonix versions — the firewall blocks ARP from the host,
+// so runtime detection via virbr2 doesn't work.
+func WhonixGatewayIP() string {
+	return "10.152.152.10"
+}
+
+func StartVM(name string) error {
+	state, _ := GetVMState(name)
+	if state == "paused" {
+		_, err := virsh("resume", name)
+		return err
+	}
+	_, err := virsh("start", name)
+	return err
+}
 func StopVM(name string) error    { _, err := virsh("shutdown", name); return err }
 func ForceOffVM(name string) error { _, err := virsh("destroy", name); return err }
 
@@ -174,7 +189,7 @@ func CloneVM(src, dst string) error {
 
 func AttachWhonixNIC(name string) error {
 	state, _ := GetVMState(name)
-	args := []string{"attach-interface", name, "network", "Whonix_internal",
+	args := []string{"attach-interface", name, "network", "Whonix-Internal",
 		"--model", "virtio", "--persistent"}
 	if state != "running" {
 		args = append(args, "--config")
@@ -187,7 +202,7 @@ func DetachWhonixNIC(name string) error {
 	out, _ := virsh("domiflist", name)
 	var mac string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Whonix_internal") {
+		if strings.Contains(line, "Whonix-Internal") {
 			if f := strings.Fields(line); len(f) >= 5 {
 				mac = f[4]
 				break
@@ -195,7 +210,7 @@ func DetachWhonixNIC(name string) error {
 		}
 	}
 	if mac == "" {
-		return fmt.Errorf("no Whonix_internal NIC on %s", name)
+		return fmt.Errorf("no Whonix-Internal NIC on %s", name)
 	}
 	state, _ := GetVMState(name)
 	args := []string{"detach-interface", name, "network", "--mac", mac, "--persistent"}

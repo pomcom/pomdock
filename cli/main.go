@@ -559,23 +559,46 @@ func vmWhonixGateway() *cobra.Command {
 }
 
 // whonixRoutingScript configures Tor routing inside the VM over SSH.
-const whonixRoutingScript = `set -e
-echo "Waiting for Whonix DHCP (up to 60s)..."
-for i in $(seq 1 30); do
-    whonix_ip=$(ip -4 addr show 2>/dev/null | grep -oP '10\.152\.152\.\d+' | head -1)
-    [ -n "$whonix_ip" ] && break; sleep 2
-done
-[ -z "$whonix_ip" ] && { echo "No Whonix DHCP lease"; exit 1; }
-echo "Whonix IP: $whonix_ip"
+// buildWhonixRoutingScript generates the script that configures static Tor routing
+// inside the VM. Whonix uses static IPs — no DHCP server runs on the gateway.
+func buildWhonixRoutingScript(gw string) string {
+	// Derive workstation IP and prefix from gateway: same /18 subnet, host .100
+	parts := strings.SplitN(gw, ".", 4)
+	wsIP := parts[0] + "." + parts[1] + "." + parts[2] + ".100"
+	prefix := "18"
+	return fmt.Sprintf(`sudo bash -s <<'INNER'
+set -e
+GW="%s"
+WS_IP="%s"
+WS_PREFIX="%s"
+
+whonix_dev=$(ip link show 2>/dev/null | awk -F': ' '/^[0-9]+: eth[1-9]/{print $2; exit}')
+[ -z "$whonix_dev" ] && { echo "No secondary NIC found"; exit 1; }
+echo "Whonix NIC: $whonix_dev"
+
+nmcli connection delete whonix-internal 2>/dev/null || true
+nmcli connection add type ethernet ifname "$whonix_dev" \
+    con-name whonix-internal \
+    ipv4.method manual \
+    ipv4.addresses "${WS_IP}/${WS_PREFIX}" \
+    ipv4.gateway "$GW" \
+    ipv4.dns "$GW" \
+    ipv4.never-default no \
+    connection.autoconnect yes
+nmcli connection up whonix-internal
+
 mgmt_dev=$(ip route show default 2>/dev/null | awk '/192\.168\./{print $5; exit}')
 if [ -n "$mgmt_dev" ]; then
     mgmt_con=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
         | awk -F: -v d="$mgmt_dev" '$2==d{print $1; exit}')
-    [ -n "$mgmt_con" ] && sudo nmcli connection modify "$mgmt_con" ipv4.never-default yes \
-        && sudo nmcli connection up "$mgmt_con"
+    [ -n "$mgmt_con" ] && nmcli connection modify "$mgmt_con" ipv4.never-default yes \
+        && nmcli connection up "$mgmt_con"
 fi
+echo "Default route:"
 ip route show default
-`
+INNER
+`, gw, wsIP, prefix)
+}
 
 func vmWhonixAttach() *cobra.Command {
 	return &cobra.Command{
@@ -585,17 +608,14 @@ func vmWhonixAttach() *cobra.Command {
 		ValidArgsFunction: completeVMs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
-			if !NetworkExists("Whonix_internal") {
-				return fmt.Errorf("Whonix_internal not found — run: pomdock vm whonix-gateway")
+			if !NetworkExists("Whonix-Internal") {
+				return fmt.Errorf("Whonix-Internal not found — run: pomdock vm whonix-gateway")
 			}
 			state, _ := GetVMState("Whonix-Gateway")
 			if state != "running" {
 				return fmt.Errorf("Whonix-Gateway not running — start it: pomdock vm start Whonix-Gateway")
 			}
-			if vmHasWhonixNIC(name) {
-				logWarn("'%s' already has a Whonix NIC", name)
-				return nil
-			}
+			alreadyHasNIC := vmHasWhonixNIC(name)
 			vmState, _ := GetVMState(name)
 			if vmState != "running" {
 				logStep("Starting '%s'...", name)
@@ -609,9 +629,13 @@ func vmWhonixAttach() *cobra.Command {
 				return err
 			}
 			logOK("Management IP: %s", mgmtIP)
-			logStep("Attaching Whonix_internal NIC...")
-			if err := AttachWhonixNIC(name); err != nil {
-				return err
+			if alreadyHasNIC {
+				logStep("Whonix NIC already attached — reconfiguring routing...")
+			} else {
+				logStep("Attaching Whonix-Internal NIC...")
+				if err := AttachWhonixNIC(name); err != nil {
+					return err
+				}
 			}
 			keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "kali")
 			var sshBase []string
@@ -636,26 +660,30 @@ func vmWhonixAttach() *cobra.Command {
 				}
 				time.Sleep(5 * time.Second)
 			}
-			logStep("Configuring Tor routing inside VM...")
+			gwIP := WhonixGatewayIP()
+			logStep("Configuring Tor routing inside VM (gateway: %s)...", gwIP)
 			sshCmd := exec.Command(opts[0], opts[1:]...)
-			sshCmd.Stdin = strings.NewReader(whonixRoutingScript)
+			sshCmd.Stdin = strings.NewReader(buildWhonixRoutingScript(gwIP))
 			sshCmd.Stdout, sshCmd.Stderr = os.Stdout, os.Stderr
 			_ = sshCmd.Run()
 			fmt.Println()
 			logOK("All traffic from '%s' now routes through Tor", name)
 			fmt.Printf("  %s  Management: %s\n", styleMuted.Render("→"), mgmtIP)
-			fmt.Printf("  %s  SOCKS5:     10.152.152.10:9050\n", styleMuted.Render("→"))
+			fmt.Printf("  %s  SOCKS5:     %s:9050\n", styleMuted.Render("→"), gwIP)
 			return nil
 		},
 	}
 }
 
-const whonixRestoreScript = `set -e
+const whonixRestoreScript = `sudo bash -s <<'INNER'
+set -e
+nmcli connection delete whonix-internal 2>/dev/null || true
 mgmt_dev=$(ip -4 addr show 2>/dev/null | awk '/192\.168\./{print $NF; exit}')
 [ -n "$mgmt_dev" ] && mgmt_con=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
     | awk -F: -v d="$mgmt_dev" '$2==d{print $1; exit}')
-[ -n "$mgmt_con" ] && sudo nmcli connection modify "$mgmt_con" ipv4.never-default no \
-    && sudo nmcli connection up "$mgmt_con" && echo "Default route restored on '$mgmt_con'"
+[ -n "$mgmt_con" ] && nmcli connection modify "$mgmt_con" ipv4.never-default no \
+    && nmcli connection up "$mgmt_con" && echo "Default route restored on '$mgmt_con'"
+INNER
 `
 
 func vmWhonixDetach() *cobra.Command {

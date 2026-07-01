@@ -1,216 +1,134 @@
 # pomdock
 
-Kali Linux pentest environment manager — Docker containers with VPN kill-switch / Tor routing, and libvirt VMs. Everything managed through one CLI and TUI.
+Kali Linux pentest environment manager — Docker containers with VPN kill-switch / Tor routing, and libvirt KVM VMs. One CLI and TUI for everything.
 
-> **This is not an OPSEC-hardened setup.** It is a convenience tool for authorized penetration testing — organized loot, isolated environments, VPN kill-switch, Tor routing. It does not make you anonymous. Container escapes, host DNS leaks, timing correlation, browser fingerprinting, and many other vectors are out of scope. If you need real anonymity, use Whonix or Tails. Use this only on engagements you are authorized to perform.
+> Convenience tool for **authorized** pentesting. Not an anonymity solution.
 
 ---
 
-## CLI — `pomdock`
+## Install
 
 ```bash
-cd cli && make build    # produces ./pomdock
-sudo make install       # installs to /usr/local/bin/pomdock
-make completion-zsh     # install zsh tab completion
+cd cli && make build        # compile
+sudo make install           # → /usr/local/bin/pomdock
+make completion-zsh         # zsh tab completion
 ```
 
-### TUI
+---
+
+## Usage
 
 ```bash
-pomdock          # or: pomdock tui
+pomdock          # open TUI (Docker + VM tabs)
 ```
 
-Two tabs (press `1`/`2` or `Tab` to switch):
-
-| Tab | Shows | Actions |
-|-----|-------|---------|
-| Docker | Running pentest containers + VPN/Tor status | `c` exec, `S` stop, `D` delete |
-| VMs | All libvirt VMs + state + IP + Whonix | `s` start, `S` stop, `c` SSH, `r` RDP, `C` console, `R` reset, `D` delete, `w`/`W` Whonix |
-
-`q` quit, `?` help, auto-refreshes every 3s.
-
-### Docker commands
+### Docker
 
 ```bash
-pomdock docker build                                   # build Kali image (~10 min first time)
-pomdock docker exec                                    # drop into shell
-pomdock docker exec --vpn ~/tap-vpn/de-ber-001.conf   # with VPN kill-switch
+pomdock docker build
+pomdock docker exec                                    # plain shell
+pomdock docker exec --vpn ~/tap-vpn/de-ber-001.conf   # VPN kill-switch
 pomdock docker exec --whonix                           # route through Tor
-pomdock docker exec --whonix --vpn ~/tap.conf          # Kali → Tor → VPN → target
+pomdock docker exec --whonix --vpn ~/tap.conf          # Tor → VPN
 pomdock docker exec --name nordea --vpn ~/tap.conf     # named engagement
-pomdock docker status                                  # show containers + VPN/Tor columns
-pomdock docker stop [--name NAME]                      # stop container + sidecars
-pomdock docker rm   [--name NAME]                      # remove container (prompts for loot)
-pomdock docker logs [--name NAME]                      # gluetun / whonix logs
-pomdock docker burp                                    # Burp proxy setup instructions
+
+pomdock docker status
+pomdock docker stop  [--name NAME]
+pomdock docker rm    [--name NAME]
+pomdock docker logs  [--name NAME]
+pomdock docker burp
 ```
 
-### VM commands
+### VMs
 
 ```bash
-pomdock vm create [name]       # download Kali QEMU, provision i3 + tools, snapshot
-pomdock vm list                # colored VM table
-pomdock vm start <name>
-pomdock vm stop  <name>
-pomdock vm ssh   <name>        # SSH in (uses ~/.ssh/kali)
-pomdock vm rdp   <name>        # RDP via xfreerdp3
-pomdock vm console <name>      # virt-viewer or serial fallback (Ctrl+] to exit)
-pomdock vm reset <name>        # revert to post-setup snapshot and boot
-pomdock vm clone <src> <new>   # clone disk for lab isolation
-pomdock vm delete <name>       # destroy + undefine + remove disk
-pomdock vm ip <name>           # print current IP
+pomdock vm create [name]       # download Kali QEMU, provision, snapshot
+pomdock vm list
+pomdock vm start / stop / ssh / rdp / console / reset / clone / delete / ip <name>
 
-# Route VM traffic through Tor (official Whonix Gateway KVM image)
-pomdock vm whonix-gateway              # download + import (~2.2 GB, one-time)
-pomdock vm whonix-attach <name>        # attach Whonix NIC, configure routing via SSH
-pomdock vm whonix-detach <name>        # remove Whonix NIC, restore default routing
+# Whonix Gateway — route VM traffic through Tor
+pomdock vm whonix-gateway              # download + import official Whonix KVM image (~2.2 GB)
+pomdock vm whonix-attach <name>
+pomdock vm whonix-detach <name>
 ```
 
-Tab completion for VM names works after running `make completion-zsh`.
+### TUI keys
+
+| Key | Action |
+|-----|--------|
+| `1` / `2` / `Tab` | Switch Docker / VM tab |
+| `c` | exec (Docker) / SSH (VM) |
+| `s` / `S` | start / stop |
+| `r` / `C` | RDP / console (VM) |
+| `R` | reset to snapshot (VM) |
+| `w` / `W` | Whonix attach / detach (VM) |
+| `D` | delete (with confirm) |
+| `q` | quit |
 
 ---
 
-## Docker network modes
+## Network modes
 
-| Flags | Stack | Sidecars |
-|-------|-------|---------|
-| *(none)* | Docker bridge | — |
-| `--vpn FILE` | Kali → gluetun (VPN) → Target | `pcm-gluetun` |
-| `--whonix` | Kali → Tor gateway → Target | `pcm-whonix` |
-| `--whonix --vpn FILE` | Kali → Tor → VPN → Target | both |
+### Docker
 
-All sidecars share network namespace with the pentest container. gluetun enforces a kill-switch via iptables — traffic is blocked if the VPN drops.
+| Flags | Stack | Notes |
+|-------|-------|-------|
+| *(none)* | Docker bridge | plain egress |
+| `--vpn FILE` | Kali → gluetun → VPN → target | WireGuard or OpenVPN; iptables kill-switch |
+| `--whonix` | Kali → Tor gateway → target | transparent Tor proxy |
+| `--whonix --vpn FILE` | Kali → Tor → VPN → target | Tor entry, VPN exit |
 
-### With VPN (`--vpn`)
+Kali shares the sidecar's network namespace. gluetun enforces an iptables kill-switch — traffic is blocked if the VPN drops. Named engagements (`--name`) get separate sidecars and a separate loot dir at `~/pentest/<name>`.
 
-```
-Host
- └── gluetun container  ← WireGuard/OpenVPN tunnel + iptables kill-switch
-      │                    HTTP proxy on :8888 (for Burp)
-      └── kali container
-```
+### VMs
 
-### With Tor (`--whonix`)
+| Command | Stack |
+|---------|-------|
+| `pomdock vm ssh <name>` | plain libvirt NAT |
+| `pomdock vm whonix-attach <name>` | Kali VM → Whonix Gateway → Tor |
 
-```
-Host
- └── tor-gateway container  ← Alpine + tor, transparent proxy (TransPort :9040)
-      └── kali container    ← all TCP → Tor, all DNS → Tor
-```
-
-### Stacked (Tor + VPN)
-
-```
-Host
- └── gluetun  ←  tor-gateway  ←  kali
-                  tor exits through VPN interface
-```
+Whonix Gateway uses static IP `10.152.152.10` on the internal bridge. After attach, all VM traffic (including DNS) routes through Tor. SOCKS5 also available at `10.152.152.10:9050`.
 
 ---
 
-## Volumes (Docker)
+## Tools
 
-| Host path | Container path | Purpose |
-|-----------|---------------|---------|
-| `~/pentest` (or `~/pentest/<name>`) | `/home/kali/pentest` | Loot, notes, scan output |
-| `${LOOT_DIR}/.atuin` | `/home/kali/.local/share/atuin` | Shell history (per engagement) |
-| `${PENTEST_DOTFILES_DIR}` | `/home/kali/dotfiles` | Dotfiles (live mount) |
-
-`PENTEST_DOTFILES_DIR` defaults to `~/dotfiles`. `PENTEST_LOOT_DIR` overrides the loot path.
-
----
-
-## Burp Suite
-
-Burp runs natively on the host. With `--vpn`, gluetun exposes an HTTP proxy on `localhost:8888`.
-
-```
-Firefox → Burp (:8080) → localhost:8888 → WireGuard → VPN exit
-```
-
-**Burp:** Project options → Connections → Upstream proxy → `127.0.0.1:8888` for `*`  
-**Firefox:** `about:config` → `network.dns.disableIPv6=true`, proxy to `localhost:8080`
-
-Burp jar: `${PENTEST_DOTFILES_DIR}/tools/burpsuite_pro*.jar`
-
----
-
-## Adding / removing tools
-
-Edit `setup-pentest.sh`. Four arrays at the top:
+Edit `setup-pentest.sh` — four arrays at the top (`PENTEST_APT`, `PENTEST_GO`, `PENTEST_BINS`, `PENTEST_PIP`), then rebuild:
 
 ```bash
-PENTEST_APT=(...)   # apt packages
-PENTEST_GO=(...)    # go install
-PENTEST_BINS=(...)  # GitHub release binaries
-PENTEST_PIP=(...)   # pipx
+pomdock docker build
 ```
-
-After editing: `pomdock docker build`
 
 ---
 
 ## Testing
 
-### Tool presence
+Each test prints: egress IP (curl), network interfaces, routes, DNS resolver, DNS leak check, and Tor status.
 
 ```bash
-./test-build.sh           # full build + test + teardown
-./test-build.sh --no-build
-./test-build.sh --keep    # keep container on failure
+./test-build.sh                        # build → tool checks → teardown
+
+# Docker
+./test-network.sh                                        # plain bridge
+./test-network.sh --vpn ~/tap.conf                       # VPN
+./test-network.sh --whonix                               # Tor
+./test-network.sh --vpn ~/tap.conf --whonix              # all Docker modes
+
+# VM (VM must be running; Whonix-Gateway must be running for --vm-whonix)
+./test-network.sh --vm kali-base                         # VM plain
+./test-network.sh --vm kali-base --vm-whonix             # VM via Tor
+
+# Everything
+./test-network.sh --vpn ~/tap.conf --whonix --vm kali-base --vm-whonix
 ```
-
-### Network stack
-
-```bash
-./test-network.sh                              # plain Docker bridge
-./test-network.sh --vpn ~/tap.conf             # + VPN
-./test-network.sh --whonix                     # + Tor
-./test-network.sh --vpn ~/tap.conf --whonix    # all four modes
-./test-network.sh --no-teardown                # keep containers for inspection
-```
-
-Per mode checks: egress IP via `am.i.mullvad.net/json`, DNS leak via `dig @ns1.google.com`, Tor status via `check.torproject.org/api/ip`.
 
 ---
 
 ## VM prerequisites
 
 ```bash
-# Ubuntu/Debian
 sudo apt install qemu-kvm libvirt-daemon-system libvirt-clients virt-viewer libguestfs-tools
-sudo adduser $USER libvirt
-# log out and back in
+sudo adduser $USER libvirt   # then log out and back in
 
-# Recommended: passwordless SSH key injection
-ssh-keygen -t ed25519 -f ~/.ssh/kali -N ""
-```
-
-`vm create` uses `libguestfs-tools` to inject your SSH key before first boot. Without it, falls back to `sshpass` with default `kali/kali` credentials.
-
----
-
-## Structure
-
-```
-pomdock/
-├── cli/                  # unified CLI (pomdock binary)
-│   ├── main.go           # cobra commands — docker + vm
-│   ├── docker_ops.go     # docker container operations
-│   ├── virsh.go          # libvirt operations
-│   ├── tui.go            # bubbletea TUI (Docker + VM tabs)
-│   ├── style.go          # Catppuccin Mocha lipgloss styles
-│   └── Makefile          # make build / install / completion-zsh
-├── pentest.sh            # Docker container lifecycle (called by pomdock docker)
-├── setup-pentest.sh      # tool installer — edit to add/remove tools
-├── Dockerfile            # Kali image
-├── tor-gateway/          # Alpine Tor gateway image
-├── test-network.sh       # network integration tests
-├── test.sh               # tool presence checks (runs inside container)
-├── test-build.sh         # full build → test → teardown
-└── kali-vm/              # VM provisioning scripts (called by pomdock vm)
-    ├── kali-libvirt-setup.sh
-    ├── kali-i3-setup.sh
-    ├── kali-setup-vm.sh
-    └── whonix-gateway-setup.sh
+ssh-keygen -t ed25519 -f ~/.ssh/kali -N ""   # key injected on create
 ```
