@@ -1,19 +1,23 @@
 #!/bin/bash
-# test-network.sh — network integration tests for all container stack modes
+# test-network.sh — network integration tests for all Docker and VM network modes
 #
 # For each mode: starts the stack, checks egress IP / DNS leak / Tor status,
-# prints full network config, asserts no leaks, then tears down.
+# prints full network config (interfaces, routes, resolv.conf), asserts no leaks.
 #
 # Usage:
-#   ./test-network.sh                          # plain (Docker bridge) only
-#   ./test-network.sh --vpn /path/to/wg.conf  # plain + vpn
-#   ./test-network.sh --whonix                 # plain + whonix (Tor)
-#   ./test-network.sh --vpn FILE --whonix      # all 4 modes
-#   ./test-network.sh --mode vpn --vpn FILE    # single mode
-#   ./test-network.sh --no-teardown            # keep containers for inspection
+#   ./test-network.sh                                         # plain (Docker bridge) only
+#   ./test-network.sh --vpn /path/to/wg.conf                 # plain + vpn
+#   ./test-network.sh --whonix                               # plain + whonix (Tor)
+#   ./test-network.sh --vpn FILE --whonix                    # all 4 Docker modes
+#   ./test-network.sh --vm kali-base                         # VM plain only
+#   ./test-network.sh --vm kali-base --vm-whonix             # VM plain + VM Whonix
+#   ./test-network.sh --vpn FILE --whonix --vm kali-base --vm-whonix  # everything
+#   ./test-network.sh --mode vpn --vpn FILE                  # single mode
+#   ./test-network.sh --no-teardown                          # keep containers for inspection
 #
-# Modes:  plain | vpn | whonix | stack
-# The 'stack' mode (Kali → Tor → VPN) requires both --vpn and --whonix.
+# Docker modes:  plain | vpn | whonix | stack
+# VM modes:      vm | vm-whonix
+# VM tests SSH into the running VM — Whonix-Gateway must be running for vm-whonix.
 
 set -uo pipefail
 
@@ -28,6 +32,8 @@ VPN_FILE=""
 USE_WHONIX=false
 NO_TEARDOWN=false
 MODE_FILTER=""
+VM_NAME=""
+USE_VM_WHONIX=false
 
 # ── Arg parsing ────────────────────────────────────────────────────
 
@@ -41,10 +47,15 @@ while [[ $# -gt 0 ]]; do
         --no-teardown)
             NO_TEARDOWN=true; shift ;;
         --mode)
-            [[ -z "${2:-}" ]] && { echo "[!] --mode requires: plain|vpn|whonix|stack"; exit 1; }
+            [[ -z "${2:-}" ]] && { echo "[!] --mode requires: plain|vpn|whonix|stack|vm|vm-whonix"; exit 1; }
             MODE_FILTER="$2"
             [[ "$MODE_FILTER" == "whonix" || "$MODE_FILTER" == "stack" ]] && USE_WHONIX=true
             shift 2 ;;
+        --vm)
+            [[ -z "${2:-}" ]] && { echo "[!] --vm requires a VM name"; exit 1; }
+            VM_NAME="$2"; shift 2 ;;
+        --vm-whonix)
+            USE_VM_WHONIX=true; shift ;;
         -h|--help)
             sed -n '2,16p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "[!] Unknown argument: $1"; exit 1 ;;
@@ -214,6 +225,46 @@ start_whonix() {
     echo ""
     err "Tor bootstrap timed out after ${max_wait}s — docker logs $name"
     return 1
+}
+
+# ── VM helpers ────────────────────────────────────────────────────
+
+get_vm_ip() {
+    local name="$1"
+    local mac
+    mac=$(virsh --connect qemu:///system domiflist "$name" 2>/dev/null \
+        | awk '/\sdefault\s/{print $NF; exit}')
+    [[ -z "$mac" ]] && return 1
+    virsh --connect qemu:///system net-dhcp-leases default 2>/dev/null \
+        | awk -v m="$mac" '$0 ~ m {print $5}' | cut -d/ -f1 | head -1
+}
+
+run_vm_check() {
+    local mode_label="$1"
+    local vm_ip="$2"
+    local expected_tor="$3"
+    local expect_dns_tunnel="${4:-false}"
+
+    echo ""
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
+    echo -e "${BOLD}${CYAN}  $mode_label${RESET}"
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
+
+    local key="$HOME/.ssh/kali"
+    local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes)
+    [[ -f "$key" ]] && ssh_opts+=(-i "$key")
+
+    # Prepend set -- to pass args with spaces safely (SSH strips quotes from inline args)
+    local exit_code=0
+    { printf 'set -- %s\n' "$(printf '%q ' "$mode_label" "$expected_tor" "$expect_dns_tunnel")"; cat "$INNER_SCRIPT"; } \
+        | ssh "${ssh_opts[@]}" "kali@$vm_ip" bash || exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        MODE_RESULTS+=("${GREEN}✓${RESET} $mode_label")
+    else
+        MODE_RESULTS+=("${RED}✗${RESET} $mode_label")
+        OVERALL_PASS=false
+    fi
 }
 
 # ── Inner check script (runs inside the Kali container) ───────────
@@ -420,17 +471,22 @@ info "Host egress IP: $HOST_IP — ${HOST_ORG}  (compare against container egres
 
 # Determine which modes to run
 RUN_PLAIN=false; RUN_VPN=false; RUN_WHONIX=false; RUN_STACK=false
+RUN_VM_PLAIN=false; RUN_VM_WHONIX=false
 
 case "${MODE_FILTER:-all}" in
-    plain)   RUN_PLAIN=true ;;
-    vpn)     RUN_VPN=true ;;
-    whonix)  RUN_WHONIX=true ;;
-    stack)   RUN_STACK=true ;;
+    plain)      RUN_PLAIN=true ;;
+    vpn)        RUN_VPN=true ;;
+    whonix)     RUN_WHONIX=true ;;
+    stack)      RUN_STACK=true ;;
+    vm)         RUN_VM_PLAIN=true ;;
+    vm-whonix)  RUN_VM_WHONIX=true ;;
     all)
         RUN_PLAIN=true
         [[ -n "$VPN_FILE" ]] && RUN_VPN=true
         [[ "$USE_WHONIX" == true ]] && RUN_WHONIX=true
         [[ -n "$VPN_FILE" && "$USE_WHONIX" == true ]] && RUN_STACK=true
+        [[ -n "$VM_NAME" ]] && RUN_VM_PLAIN=true
+        [[ -n "$VM_NAME" && "$USE_VM_WHONIX" == true ]] && RUN_VM_WHONIX=true
         ;;
 esac
 
@@ -496,6 +552,44 @@ if [[ "$RUN_STACK" == true ]]; then
         teardown_stack "$WN" "$GT"
         MODE_RESULTS+=("${RED}✗${RESET} stack — sidecar failed to start")
         OVERALL_PASS=false
+    fi
+fi
+
+# ── vm plain ─────────────────────────────────────────────────────
+
+if [[ "$RUN_VM_PLAIN" == true || "$RUN_VM_WHONIX" == true ]]; then
+    [[ -z "$VM_NAME" ]] && { err "--vm NAME required for VM tests"; exit 1; }
+    info "Getting IP for VM '$VM_NAME'..."
+    VM_IP=$(get_vm_ip "$VM_NAME")
+    if [[ -z "$VM_IP" ]]; then
+        err "No DHCP lease for '$VM_NAME' — is it running? (pomdock vm start $VM_NAME)"
+        OVERALL_PASS=false
+        RUN_VM_PLAIN=false; RUN_VM_WHONIX=false
+    else
+        info "VM management IP: $VM_IP"
+    fi
+fi
+
+if [[ "$RUN_VM_PLAIN" == true ]]; then
+    # Check if Whonix NIC is attached — if so, traffic will exit via Tor
+    vm_has_whonix=$(virsh --connect qemu:///system domiflist "$VM_NAME" 2>/dev/null | grep -c Whonix-Internal || true)
+    if [[ "$vm_has_whonix" -gt 0 ]]; then
+        run_vm_check "VM (Whonix attached — routing via Tor)" "$VM_IP" "true" "true"
+    else
+        run_vm_check "VM plain — KVM bridge" "$VM_IP" "false" "false"
+    fi
+fi
+
+# ── vm whonix ─────────────────────────────────────────────────────
+
+if [[ "$RUN_VM_WHONIX" == true ]]; then
+    gw_state=$(virsh --connect qemu:///system domstate Whonix-Gateway 2>/dev/null || true)
+    if [[ "$gw_state" != "running" ]]; then
+        err "Whonix-Gateway not running — run: pomdock vm start Whonix-Gateway"
+        MODE_RESULTS+=("${RED}✗${RESET} VM whonix — gateway not running")
+        OVERALL_PASS=false
+    else
+        run_vm_check "VM whonix — KVM → Whonix Gateway → Tor" "$VM_IP" "true" "true"
     fi
 fi
 
