@@ -2,8 +2,6 @@
 
 Kali Linux pentest environment manager. Wraps Docker containers (VPN kill-switch, Tor routing) and libvirt KVM VMs under one CLI.
 
-> For authorized pentesting only.
-
 ---
 
 ## Install
@@ -34,7 +32,30 @@ pomdock docker logs   [--name NAME]
 pomdock docker burp
 ```
 
-Named engagements get their own sidecar containers and loot dir at `~/pentest/<name>`.
+Named engagements get their own sidecar containers and loot dir at `~/pentest/<name>`, plus a separate atuin history.
+
+### Dotfiles
+
+Dotfiles are the main way to get your shell environment into the container. Two mechanisms work together:
+
+**Build time** -- the Dockerfile copies your dotfiles dir into the image via `--build-context`:
+```bash
+PENTEST_DOTFILES_DIR=~/pcm.dot pomdock docker build
+```
+If `setup-shell.sh` exists in the dotfiles dir, it runs during build (installs zsh plugins, atuin, starship, etc.).
+
+**Runtime** -- `pentest.sh` mounts the same dir live over the baked-in copy:
+```
+~/pcm.dot  ->  /home/kali/dotfiles  (read-write, live)
+```
+Inside the container `~/pcm.dot` is a symlink to `~/dotfiles`, so paths match. Edits to your dotfiles on the host are immediately visible in the container without rebuilding.
+
+`PENTEST_DOTFILES_DIR` defaults to `~/dotfiles`. Set it to wherever your dotfiles live:
+```bash
+export PENTEST_DOTFILES_DIR=~/pcm.dot
+```
+
+Atuin config is picked up from `dotfiles/atuin/.config/atuin/` (symlinked into `~/.config/atuin` during build). The atuin binary comes from `setup-shell.sh` -- if you have a custom build, put it at `dotfiles/atuin/bin/atuin` and update `setup-shell.sh` to prefer it over the upstream installer.
 
 ### Network stacks
 
@@ -45,7 +66,7 @@ Named engagements get their own sidecar containers and loot dir at `~/pentest/<n
 | `--whonix` | Kali -> Tor gateway |
 | `--whonix --vpn FILE` | Kali -> Tor -> VPN |
 
-Kali always shares the sidecar's network namespace. gluetun enforces an iptables kill-switch so traffic is blocked if the VPN drops.
+Kali shares the sidecar's network namespace. gluetun enforces an iptables kill-switch so traffic is blocked if the VPN drops.
 
 ### DNS per mode
 
@@ -82,20 +103,20 @@ pomdock vm whonix-detach <name>
 
 ### VM + Whonix setup
 
-1. `pomdock vm whonix-gateway` -- imports the official Whonix KVM image (one time)
+1. `pomdock vm whonix-gateway` -- imports the official Whonix KVM image (one time, ~2.2 GB)
 2. Start your VM: `pomdock vm start <name>`
-3. `pomdock vm whonix-attach <name>` -- hotplugs a second NIC on the Whonix-Internal bridge and runs inside the VM:
-   - assigns static IP `10.152.152.100/18` on `eth1`
-   - sets default route via `10.152.152.10` (the Gateway)
-   - sets DNS to `10.152.152.10` (Tor-proxied)
-   - demotes `eth0` so management traffic (SSH/RDP on `192.168.122.x`) still works
-4. First boot: wait ~2 min for Tor to bootstrap before traffic flows. Whonix is fail-closed -- nothing gets through until Tor is up.
+3. `pomdock vm whonix-attach <name>` -- hotplugs a second NIC on the Whonix-Internal bridge and configures inside the VM:
+   - static IP `10.152.152.100/18` on `eth1`
+   - default route via `10.152.152.10` (the Gateway)
+   - DNS set to `10.152.152.10` (Tor-proxied)
+   - management NIC (`eth0 / 192.168.122.x`) stays up for SSH/RDP
+4. First boot: wait ~2 min for Tor to bootstrap. Whonix is fail-closed, nothing gets through until Tor is up.
 
-SOCKS5 proxy available at `10.152.152.10:9050` without full transparent routing.
+SOCKS5 proxy at `10.152.152.10:9050` if you need it without full transparent routing.
 
 ### VPN in VMs
 
-`wireguard-tools`, `openvpn`, `openresolv`, and `mullvad-vpn` are installed during provisioning. Connect manually after `pomdock vm ssh <name>`. Note: WireGuard through libvirt NAT can have handshake issues depending on host network config -- the Docker `--vpn` mode is more reliable for automated VPN management.
+`wireguard-tools`, `openvpn`, `openresolv`, and `mullvad-vpn` are installed during provisioning. Connect manually after `pomdock vm ssh <name>`. WireGuard through libvirt NAT can have handshake issues -- the Docker `--vpn` mode is more reliable for automated VPN management.
 
 ---
 
@@ -115,8 +136,6 @@ pomdock docker build
 pomdock tui   # or just: pomdock
 ```
 
-Docker tab and VM tab. Basic status and shortcuts -- see key bindings below.
-
 | Key | Action |
 |-----|--------|
 | `1` / `2` / `Tab` | Switch Docker / VM tab |
@@ -132,7 +151,7 @@ Docker tab and VM tab. Basic status and shortcuts -- see key bindings below.
 
 ## Testing
 
-Each test prints the egress IP, interfaces, routes, DNS resolver, DNS leak check, and Tor status so you can verify no leaks.
+Each test prints the egress IP, interfaces, routes, DNS resolver, DNS leak check, and Tor status.
 
 ```bash
 ./test-build.sh                        # build + tool checks
@@ -143,7 +162,7 @@ Each test prints the egress IP, interfaces, routes, DNS resolver, DNS leak check
 ./test-network.sh --whonix             # Tor
 ./test-network.sh --vpn ~/tap.conf --whonix   # all modes
 
-# VM (VM must be running; Whonix-Gateway must be running for --vm-whonix)
+# VM (must be running; Whonix-Gateway must be running for --vm-whonix)
 ./test-network.sh --vm kali-base
 ./test-network.sh --vm kali-base --vm-whonix
 
@@ -151,8 +170,7 @@ Each test prints the egress IP, interfaces, routes, DNS resolver, DNS leak check
 ./test-network.sh --vpn ~/tap.conf --whonix --vm kali-base --vm-whonix
 ```
 
-### Expected warnings (not real leaks)
-
-- **VPN mode, DNS egress != HTTP egress** -- gluetun's DoT resolver exits from the WireGuard peer IP, not the assigned exit IP. Same tunnel, different IP. Normal.
-- **VM+Whonix, "No response from Google NS"** -- Whonix blocks direct UDP to external nameservers by design. DNS still routes through Tor via `10.152.152.10`. Normal.
-- **VM+Whonix, "Nameserver is private IP (10.152.152.10)"** -- that is the Whonix Gateway; DNS is Tor-proxied. Normal.
+Expected warnings that are not real leaks:
+- **VPN, DNS egress != HTTP egress** -- gluetun DoT exits from the WireGuard peer IP, not the assigned exit IP. Same tunnel.
+- **VM+Whonix, no response from Google NS** -- Whonix blocks direct UDP to external nameservers by design. DNS still routes through Tor.
+- **VM+Whonix, nameserver is private IP** -- `10.152.152.10` is the Whonix Gateway; DNS is Tor-proxied.
