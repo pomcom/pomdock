@@ -36,26 +36,21 @@ Named engagements get their own sidecar containers and loot dir at `~/pentest/<n
 
 ### Dotfiles
 
-Dotfiles are the main way to get your shell environment into the container. Two mechanisms work together:
+Set `PENTEST_DOTFILES_DIR` to your dotfiles directory (default: `~/dotfiles`):
 
-**Build time** -- the Dockerfile copies your dotfiles dir into the image via `--build-context`:
-```bash
-PENTEST_DOTFILES_DIR=~/pcm.dot pomdock docker build
-```
-If `setup-shell.sh` exists in the dotfiles dir, it runs during build (installs zsh plugins, atuin, starship, etc.).
-
-**Runtime** -- `pentest.sh` mounts the same dir live over the baked-in copy:
-```
-~/pcm.dot  ->  /home/kali/dotfiles  (read-write, live)
-```
-Inside the container `~/pcm.dot` is a symlink to `~/dotfiles`, so paths match. Edits to your dotfiles on the host are immediately visible in the container without rebuilding.
-
-`PENTEST_DOTFILES_DIR` defaults to `~/dotfiles`. Set it to wherever your dotfiles live:
 ```bash
 export PENTEST_DOTFILES_DIR=~/pcm.dot
 ```
 
-Atuin config is picked up from `dotfiles/atuin/.config/atuin/` (symlinked into `~/.config/atuin` during build). The atuin binary comes from `setup-shell.sh` -- if you have a custom build, put it at `dotfiles/atuin/bin/atuin` and update `setup-shell.sh` to prefer it over the upstream installer.
+Your dotfiles are baked into the image at build time and mounted live at runtime:
+
+```
+~/pcm.dot  ->  /home/kali/dotfiles
+```
+
+Inside the container `~/pcm.dot` is a symlink to `~/dotfiles`, so relative paths in your configs work the same way. Changes on the host are immediately visible without rebuilding.
+
+If `setup-shell.sh` exists in your dotfiles dir, it runs during build to install shell tooling (zsh plugins, atuin, starship, etc.). If `atuin/bin/atuin` exists in the dotfiles dir, it gets used instead of downloading from upstream.
 
 ### Network stacks
 
