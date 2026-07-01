@@ -26,11 +26,15 @@ If `~/.ssh/kali.pub` exists, it is injected automatically and key auth is prefer
 ## Commands
 
 ```bash
-pentest/kali-vm/vm create [name]   # default: kali-base
-pentest/kali-vm/vm clone <src> <new>
-pentest/kali-vm/vm reset <name>    # reverts to snapshot: post-setup
-pentest/kali-vm/vm ip <name>
-pentest/kali-vm/vm delete <name>   # destroy + undefine + remove qcow2
+kali-vm/vm create [name]       # default: kali-base
+kali-vm/vm start <name>
+kali-vm/vm stop <name>
+kali-vm/vm reset <name>        # revert to snapshot "post-setup" and start
+kali-vm/vm ssh <name>          # SSH in (uses ~/.ssh/kali if present)
+kali-vm/vm console <name>      # SPICE graphical console (virt-viewer)
+kali-vm/vm ip <name>
+kali-vm/vm clone <src> <new>
+kali-vm/vm delete <name>       # destroy + undefine + remove qcow2
 ```
 
 ## Libvirt URI

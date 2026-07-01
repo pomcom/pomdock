@@ -41,6 +41,7 @@ WORKDIR /home/$USERNAME
 
 ENV GOPATH=/home/$USERNAME/go
 ENV PATH=/home/$USERNAME/go/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.cargo/bin:$PATH
+ENV STARSHIP_CONFIG=/home/$USERNAME/dotfiles/starship/.config/starship-pentest.toml
 
 # ── Dotfiles (pass --build-context dotfiles=~/your-dotfiles-dir) ──────
 # Mounted at runtime to the same path — see pentest.sh (PENTEST_DOTFILES_DIR).
@@ -53,6 +54,11 @@ RUN bash /tmp/setup-pentest.sh
 RUN if [ -f /home/$USERNAME/dotfiles/setup-shell.sh ]; then \
         bash /home/$USERNAME/dotfiles/setup-shell.sh; \
     fi \
-    && cp /tmp/recon.md /home/$USERNAME/recon.md
+    && cp /tmp/recon.md /home/$USERNAME/recon.md \
+    && mkdir -p /home/$USERNAME/.config \
+    && if [ -d /home/$USERNAME/dotfiles/atuin/.config/atuin ]; then \
+           rm -rf /home/$USERNAME/.config/atuin \
+           && ln -s /home/$USERNAME/dotfiles/atuin/.config/atuin /home/$USERNAME/.config/atuin; \
+       fi
 
 CMD ["zsh"]
