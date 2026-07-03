@@ -2,6 +2,13 @@ tools/
 CLAUDE.md
 recon.md
 TODO.md
+bin/
+/atuin/
+vendor/atuin/target/
+vendor/atuin/.cargo/
+vendor/atuin/.claude/
+vendor/atuin/.depot/
+vendor/atuin/.atuin/
 
 # compiled binaries — build from source (see cli/Makefile)
 kali-vm/vm

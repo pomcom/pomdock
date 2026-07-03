@@ -1,3 +1,18 @@
+FROM rust:slim AS atuin-builder
+
+WORKDIR /src/atuin
+COPY vendor/atuin/ ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo build --release --locked -p atuin
+
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -8,7 +23,6 @@ ENV LANG=en_US.UTF-8
 # Go/bin/pip tools are installed by setup-pentest.sh as the kali user.
 # VPN is handled by a gluetun sidecar, not inside this container.
 COPY setup-pentest.sh /tmp/setup-pentest.sh
-COPY recon.md /tmp/recon.md
 RUN printf 'http://eu.mirror.ionos.com/linux/distributions/kali/kali/\nhttp://mirror.pyratelan.org/kali/\n' \
         > /tmp/kali-mirrors \
     && echo "deb mirror+file:/tmp/kali-mirrors kali-rolling main non-free contrib" \
@@ -47,19 +61,21 @@ ENV STARSHIP_CONFIG=/home/$USERNAME/dotfiles/starship/.config/starship-pentest.t
 # Mounted at runtime to the same path — see pentest.sh (PENTEST_DOTFILES_DIR).
 COPY --from=dotfiles --chown=$USERNAME:$USERNAME . /home/$USERNAME/dotfiles/
 
-# ── Bundled atuin binary (custom build with absolute timestamps) ───
-# setup-shell.sh will use this if no dotfiles/atuin/bin/atuin is present.
-# Falls back to upstream installer if this file is missing (unlikely).
-COPY --chown=$USERNAME:$USERNAME bin/atuin /home/$USERNAME/.atuin/bin/atuin
+# ── Vendored patched atuin build ───────────────────────────────────
+# Built from the vendored workspace in ./atuin so the container does not rely
+# on an untracked local binary.
+COPY --from=atuin-builder --chown=$USERNAME:$USERNAME --chmod=0755 /src/atuin/target/release/atuin /home/$USERNAME/.atuin/bin/atuin
 
 # ── Pentest tools — single source of truth: setup-pentest.sh ──────
 RUN bash /tmp/setup-pentest.sh
 
 # ── Shell setup (optional — runs setup-shell.sh if present in dotfiles) ──────
-RUN if [ -f /home/$USERNAME/dotfiles/setup-shell.sh ]; then \
-        bash /home/$USERNAME/dotfiles/setup-shell.sh; \
-    fi \
-    && cp /tmp/recon.md /home/$USERNAME/recon.md \
+RUN mkdir -p /home/$USERNAME/.atuin/bin \
+    && if [ -f /home/$USERNAME/dotfiles/setup-shell.sh ]; then \
+           bash /home/$USERNAME/dotfiles/setup-shell.sh; \
+       fi \
+    && printf '# Recon Notes\n\n## Scope\n- Target:\n- Rules of engagement:\n\n## Hosts\n- \n\n## Findings\n- \n\n## Credentials\n- \n\n## Next Steps\n- \n' \
+        > /home/$USERNAME/recon.md \
     && mkdir -p /home/$USERNAME/.config \
     && if [ -d /home/$USERNAME/dotfiles/atuin/.config/atuin ]; then \
            rm -rf /home/$USERNAME/.config/atuin \

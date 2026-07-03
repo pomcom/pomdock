@@ -52,7 +52,7 @@ Inside the container `~/pcm.dot` is a symlink to `~/dotfiles`, so relative paths
 
 If `setup-shell.sh` exists in your dotfiles dir, it runs during build to install shell tooling (zsh plugins, atuin, starship, etc.).
 
-The image ships a custom-built atuin binary (`bin/atuin`) that shows absolute timestamps instead of relative ones. If your dotfiles include their own `atuin/bin/atuin`, that takes priority. Falls back to the upstream installer if neither is present.
+The image builds the vendored patched `vendor/atuin/` source during `docker build` and seeds that binary first so `setup-shell.sh` can reuse it.
 
 ### Network stacks
 
