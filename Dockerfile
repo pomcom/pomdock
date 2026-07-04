@@ -17,6 +17,8 @@ FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 # ── Base shell + build deps ───────────────────────────────────────
 # Apt pentest tools are installed here as root (avoids sudo issues in setup-pentest.sh).
@@ -35,7 +37,9 @@ RUN printf 'http://eu.mirror.ionos.com/linux/distributions/kali/kali/\nhttp://mi
         golang-go \
         bind9-dnsutils \
         unzip ca-certificates locales passwd sudo \
+    && printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
     && locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8 \
     && ln -sf /usr/share/zoneinfo/Europe/Berlin /etc/localtime \
     && echo "Europe/Berlin" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -71,6 +75,7 @@ RUN bash /tmp/setup-pentest.sh
 
 # ── Shell setup (optional — runs setup-shell.sh if present in dotfiles) ──────
 RUN mkdir -p /home/$USERNAME/.atuin/bin \
+    && printf 'export PATH="$HOME/.atuin/bin:$PATH"\n' > /home/$USERNAME/.atuin/bin/env \
     && if [ -f /home/$USERNAME/dotfiles/setup-shell.sh ]; then \
            bash /home/$USERNAME/dotfiles/setup-shell.sh; \
        fi \
