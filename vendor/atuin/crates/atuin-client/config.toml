@@ -351,7 +351,7 @@ records = true
 ## column fill remaining space. Only one column should have expand = true.
 ##
 ## Default:
-# columns = ["duration", "time", "command"]
+# columns = ["duration", "datetime", "command"]
 ##
 ## Examples:
 ##
@@ -362,10 +362,10 @@ records = true
 # columns = ["duration", { type = "directory", width = 30 }, "command"]
 ##
 ## Show host for multi-machine sync users:
-# columns = ["duration", "time", "host", "command"]
+# columns = ["duration", "datetime", "host", "command"]
 ##
 ## Show exit codes prominently:
 # columns = ["exit", "duration", "command"]
 ##
 ## Make directory expand instead of command:
-# columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
+# columns = ["duration", "datetime", { type = "directory", expand = true }, { type = "command", expand = false }]

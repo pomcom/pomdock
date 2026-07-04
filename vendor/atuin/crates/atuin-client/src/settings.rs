@@ -1041,7 +1041,7 @@ impl Ui {
     fn default_columns() -> Vec<UiColumn> {
         vec![
             UiColumn::new(UiColumnType::Duration),
-            UiColumn::new(UiColumnType::Time),
+            UiColumn::new(UiColumnType::Datetime),
             UiColumn::new(UiColumnType::Command),
         ]
     }
