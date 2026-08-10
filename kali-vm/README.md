@@ -1,15 +1,17 @@
-# Kali VM (libvirt)
+# kali-vm
 
-Minimal wrapper for fast local Kali VM handling with automatic i3/pentest provisioning.
+Low-level libvirt scripts backing `pomdock vm ...`. See the main
+[README](../README.md) for the full command reference and Whonix setup — this
+file only covers details specific to running the scripts directly.
 
-## Quickstart
+## Standalone usage
 
 ```bash
-cd ~/dotfiles
-chmod +x pentest/kali-vm/vm
+chmod +x kali-vm/vm
+kali-vm/vm create [name]       # default: kali-base
 ```
 
-Optional — hands-off SSH bootstrap on first login (`kali/kali`):
+Optional — hands-off SSH bootstrap on first login (`kali`/`kali`):
 
 ```bash
 sudo apt install sshpass
@@ -21,45 +23,23 @@ Fully automatic bootstrap (recommended):
 sudo apt install libguestfs-tools
 ```
 
-If `~/.ssh/kali.pub` exists, it is injected automatically and key auth is preferred.
-
-## Commands
-
-```bash
-kali-vm/vm create [name]       # default: kali-base
-kali-vm/vm start <name>
-kali-vm/vm stop <name>
-kali-vm/vm reset <name>        # revert to snapshot "post-setup" and start
-kali-vm/vm ssh <name>          # SSH in (uses ~/.ssh/kali if present)
-kali-vm/vm console <name>      # SPICE graphical console (virt-viewer)
-kali-vm/vm ip <name>
-kali-vm/vm clone <src> <new>
-kali-vm/vm delete <name>       # destroy + undefine + remove qcow2
-```
+If `~/.ssh/kali.pub` exists, it's injected automatically and key auth is
+preferred over password auth.
 
 ## Libvirt URI
 
-Always use `qemu:///system`. The `vm` script sets this automatically.
-
-Manual checks:
+Always `qemu:///system` — every script sets this explicitly. Manual checks:
 
 ```bash
 virsh --connect qemu:///system list --all
 ```
 
-## What `create` does
+## Scripts
 
-1. Downloads Kali QEMU image.
-2. Creates VM in local libvirt.
-3. Waits for IP + SSH.
-4. Copies and executes `kali-i3-setup.sh` in the VM.
-5. Creates snapshot `post-setup`.
-
-## Post-install inside VM
-
-`kali-setup-vm.sh` is an alternative lightweight bootstrap (no i3, just zsh/atuin/tmux/xrdp)
-for cases where you want a quick XFCE setup instead of a full i3 environment:
-
-```bash
-scp pentest/kali-vm/kali-setup-vm.sh kali@<vm-ip>:~ && ssh kali@<vm-ip> bash kali-setup-vm.sh
-```
+| Script | Purpose |
+|--------|---------|
+| `vm` | lifecycle: create/clone/reset/ip/delete (used by the Go CLI) |
+| `kali-libvirt-setup.sh` | full VM create + SSH bootstrap + i3 setup + snapshot |
+| `kali-i3-setup.sh` | i3wm + autotiling + rofi + zsh/atuin/tmux, run inside the VM |
+| `kali-setup-vm.sh` | lightweight XFCE/xrdp/zsh/atuin/tmux bootstrap, run manually inside the VM |
+| `whonix-gateway-setup.sh` | downloads + imports the official Whonix Gateway KVM image |
