@@ -11,22 +11,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// repoRoot is the pomdock repo root (one level up from the cli/ binary location).
-var repoRoot string
+var (
+	repoRoot      string
+	installedRoot = "/usr/local/lib/pomdock"
+)
 
 func main() {
-	exe, err := os.Executable()
-	if err != nil {
-		repoRoot, _ = os.Getwd()
-	} else {
-		// binary lives at <repo>/cli/pomdock or <repo>/pomdock (after install)
-		dir := filepath.Dir(exe)
-		if filepath.Base(dir) == "cli" {
-			repoRoot = filepath.Dir(dir)
-		} else {
-			repoRoot = dir
-		}
-	}
+	repoRoot = findRepoRoot()
 
 	root := &cobra.Command{
 		Use:   "pomdock",
@@ -82,6 +73,60 @@ func main() {
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func findRepoRoot() string {
+	var candidates []string
+	if configured := os.Getenv("POMDOCK_ROOT"); configured != "" {
+		candidates = append(candidates, configured)
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(exe); resolveErr == nil {
+			exe = resolved
+		}
+		dir := filepath.Dir(exe)
+		if filepath.Base(dir) == "cli" {
+			candidates = append(candidates, filepath.Dir(dir))
+		} else {
+			candidates = append(candidates, dir)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			candidates = append(candidates, dir)
+			if parent := filepath.Dir(dir); parent == dir {
+				break
+			}
+		}
+	}
+	candidates = append(candidates, installedRoot)
+	if root, ok := firstRepoRoot(candidates); ok {
+		return root
+	}
+	return installedRoot
+}
+
+func firstRepoRoot(candidates []string) (string, bool) {
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		if isRepoRoot(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func isRepoRoot(dir string) bool {
+	if info, err := os.Stat(filepath.Join(dir, "pentest.sh")); err != nil || info.IsDir() {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, "kali-vm"))
+	return err == nil && info.IsDir()
 }
 
 // runInteractive runs a command with stdio attached.
@@ -470,25 +515,14 @@ func vmRDP() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeVMs,
 		RunE: func(_ *cobra.Command, args []string) error {
-			rdpBin := ""
-			if _, err := exec.LookPath("xfreerdp3"); err == nil {
-				rdpBin = "xfreerdp3"
-			} else if _, err := exec.LookPath("xfreerdp"); err == nil {
-				rdpBin = "xfreerdp"
-			}
-			if rdpBin == "" {
-				return fmt.Errorf("xfreerdp3 not found — install: sudo apt install freerdp3-x11")
-			}
 			name := args[0]
-			logStep("Resolving IP for '%s'...", name)
-			ip, err := WaitForVMIP(name, 30*time.Second)
+			logStep("Starting '%s' if needed and resolving its IP...", name)
+			cmd, ip, err := PrepareVMRDP(name, 90*time.Second)
 			if err != nil {
 				return err
 			}
-			logOK("RDP → kali@%s via %s", ip, rdpBin)
-			return runInteractive(exec.Command(rdpBin,
-				"/v:"+ip, "/u:kali",
-				"/dynamic-resolution", "/gfx:avc444", "+clipboard", "/cert:tofu"))
+			logOK("RDP → kali@%s via %s", ip, cmd.Path)
+			return runInteractive(cmd)
 		},
 	}
 }
@@ -608,8 +642,8 @@ func vmWhonixAttach() *cobra.Command {
 		ValidArgsFunction: completeVMs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
-			if !NetworkExists("Whonix-Internal") {
-				return fmt.Errorf("Whonix-Internal not found — run: pomdock vm whonix-gateway")
+			if !NetworkExists(whonixNetwork) {
+				return fmt.Errorf("%s not found — run: pomdock vm whonix-gateway", whonixNetwork)
 			}
 			state, _ := GetVMState("Whonix-Gateway")
 			if state != "running" {
