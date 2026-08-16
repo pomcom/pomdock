@@ -18,12 +18,32 @@ and can be run standalone if you don't want the Go binary.
 
 ```bash
 cd cli && make build
-sudo make install        # /usr/local/bin/pomdock
+make install             # binary + runtime files under /usr/local
 make completion-zsh
 ```
 
-Requires Go (build only), Docker, and — for the VM side — `qemu-kvm`,
+Set `PREFIX` to use another location, or set `POMDOCK_ROOT` when running the
+binary against a source checkout explicitly.
+
+Requires Go (build only), Docker, `tmux`, and — for the VM side — `qemu-kvm`,
 `libvirt-daemon-system`, `libvirt-clients`, `virt-viewer`, `libguestfs-tools`.
+
+### TUI workflow
+
+Run `pomdock` without arguments. Pomdock creates or reattaches a dedicated
+tmux workspace with the TUI in window `0:dashboard`. In the Docker tab, press `n` to create a
+named engagement and choose direct, VPN, Tor, or combined routing. Press `c`
+to focus the embedded command pane for the selected container; `Esc` returns
+to navigation, and `C` opens a full interactive zsh when a command needs a
+PTY. The command pane keeps its working directory per container and supports
+Up/Down command history and `Ctrl+L` to clear its output.
+
+Full shells are persistent windows in the same tmux workspace. The **Shells**
+tab lists them; Enter switches windows and `D` closes only that shell window.
+Use `Ctrl+B 0` to return to the dashboard, `Ctrl+B n`/`p` to move between
+windows, or `Ctrl+B d` to detach the whole workspace without terminating the
+TUI, zsh, Atuin history, or running jobs. `q` closes the dashboard; existing
+shell windows remain and the next `pomdock` launch recreates the dashboard.
 
 ```bash
 sudo apt install qemu-kvm libvirt-daemon-system libvirt-clients virt-viewer libguestfs-tools
@@ -76,7 +96,7 @@ side by side without them colliding.
 
 ### Dotfiles
 
-Set `PENTEST_DOTFILES_DIR` to your dotfiles directory (default: `~/dotfiles`):
+Pomdock uses `~/pcm.dot` by default. Override it with `PENTEST_DOTFILES_DIR`:
 
 ```bash
 export PENTEST_DOTFILES_DIR=~/pcm.dot
@@ -218,16 +238,22 @@ pomdock tui   # or just: pomdock
 
 | Key | Action |
 |-----|--------|
-| `1` / `2` / `Tab` | Switch Docker / VM tab |
+| `1` / `2` / `3` / `Tab` | Switch Docker / VM / Shells tab |
 | `↑`/`k`, `↓`/`j` | Move selection |
-| `c` / `Enter` | exec (Docker) / SSH (VM) |
-| `s` / `S` | start / stop |
-| `r` / `C` | RDP / console (VM) |
-| `R` | reset to snapshot (VM) |
-| `w` / `W` | Whonix attach / detach (VM) |
-| `D` | delete (confirm required) |
+| `n` | Create a Docker/VM engagement; create a shell from Shells |
+| `c` / `Enter` | Embedded Docker command / VM SSH / attach shell |
+| `C` | Persistent Docker shell window / VM console |
+| `s` / `S` | Start / stop the selected Docker container or VM |
+| `r` / `R` | VM RDP / reset to snapshot |
+| `w` / `W` | Attach / detach VM Whonix routing |
+| `D` | Delete container or VM; close shell (confirmation required) |
 | `?` | help |
 | `q` / `Ctrl+C` | quit |
+
+In the VM tab, `n` clones the selected VM by default for a fast engagement
+workspace; switch the form to **Fresh Kali** to run the full provisioning flow.
+Press `r` to start the selected VM if necessary, wait for its address, and
+launch `xfreerdp3` (or `xfreerdp`) with dynamic resolution and clipboard support.
 
 ---
 

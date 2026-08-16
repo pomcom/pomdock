@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	snapshotName = "post-setup"
-	imageDir     = "/var/lib/libvirt/images"
-	libvirtURI   = "qemu:///system"
+	snapshotName  = "post-setup"
+	imageDir      = "/var/lib/libvirt/images"
+	libvirtURI    = "qemu:///system"
+	whonixNetwork = "Whonix-Internal"
 )
 
 type VM struct {
@@ -130,7 +131,7 @@ func dhcpSearch(mac string) string {
 
 func vmHasWhonixNIC(name string) bool {
 	out, _ := virsh("domiflist", name)
-	return strings.Contains(out, "Whonix-Internal")
+	return strings.Contains(out, whonixNetwork)
 }
 
 func VMExists(name string) bool {
@@ -159,7 +160,7 @@ func StartVM(name string) error {
 	_, err := virsh("start", name)
 	return err
 }
-func StopVM(name string) error    { _, err := virsh("shutdown", name); return err }
+func StopVM(name string) error     { _, err := virsh("shutdown", name); return err }
 func ForceOffVM(name string) error { _, err := virsh("destroy", name); return err }
 
 func DeleteVM(name string) error {
@@ -189,7 +190,7 @@ func CloneVM(src, dst string) error {
 
 func AttachWhonixNIC(name string) error {
 	state, _ := GetVMState(name)
-	args := []string{"attach-interface", name, "network", "Whonix-Internal",
+	args := []string{"attach-interface", name, "network", whonixNetwork,
 		"--model", "virtio", "--persistent"}
 	if state != "running" {
 		args = append(args, "--config")
@@ -202,7 +203,7 @@ func DetachWhonixNIC(name string) error {
 	out, _ := virsh("domiflist", name)
 	var mac string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Whonix-Internal") {
+		if strings.Contains(line, whonixNetwork) {
 			if f := strings.Fields(line); len(f) >= 5 {
 				mac = f[4]
 				break
@@ -210,7 +211,7 @@ func DetachWhonixNIC(name string) error {
 		}
 	}
 	if mac == "" {
-		return fmt.Errorf("no Whonix-Internal NIC on %s", name)
+		return fmt.Errorf("no %s NIC on %s", whonixNetwork, name)
 	}
 	state, _ := GetVMState(name)
 	args := []string{"detach-interface", name, "network", "--mac", mac, "--persistent"}
@@ -230,6 +231,33 @@ func WaitForVMIP(name string, timeout time.Duration) (string, error) {
 		time.Sleep(3 * time.Second)
 	}
 	return "", fmt.Errorf("timeout waiting for IP of %s", name)
+}
+
+func PrepareVMRDP(name string, timeout time.Duration) (*exec.Cmd, string, error) {
+	rdpBin := ""
+	if _, err := exec.LookPath("xfreerdp3"); err == nil {
+		rdpBin = "xfreerdp3"
+	} else if _, err := exec.LookPath("xfreerdp"); err == nil {
+		rdpBin = "xfreerdp"
+	}
+	if rdpBin == "" {
+		return nil, "", fmt.Errorf("xfreerdp3 not found — install: sudo apt install freerdp3-x11")
+	}
+	state, err := GetVMState(name)
+	if err != nil {
+		return nil, "", err
+	}
+	if state != "running" {
+		if err := StartVM(name); err != nil {
+			return nil, "", fmt.Errorf("start VM: %w", err)
+		}
+	}
+	ip, err := WaitForVMIP(name, timeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return exec.Command(rdpBin, "/v:"+ip, "/u:kali",
+		"/dynamic-resolution", "/gfx:avc444", "+clipboard", "/cert:tofu"), ip, nil
 }
 
 func vmNames() []string {

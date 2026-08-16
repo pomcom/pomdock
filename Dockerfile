@@ -13,6 +13,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && cargo build --release --locked -p atuin
 
+FROM golang:1.22-bookworm AS jsluice-builder
+
+RUN CGO_ENABLED=1 go install \
+    github.com/BishopFox/jsluice/cmd/jsluice@v0.0.0-20240110145140-0ddfab153e06
+
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -61,14 +66,19 @@ ENV GOPATH=/home/$USERNAME/go
 ENV PATH=/home/$USERNAME/go/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.cargo/bin:$PATH
 ENV STARSHIP_CONFIG=/home/$USERNAME/dotfiles/starship/.config/starship-pentest.toml
 
-# ── Dotfiles (pass --build-context dotfiles=~/your-dotfiles-dir) ──────
+# ── Dotfiles (staged by scripts/build-image.sh) ───────────────────────
 # Mounted at runtime to the same path — see pentest.sh (PENTEST_DOTFILES_DIR).
-COPY --from=dotfiles --chown=$USERNAME:$USERNAME . /home/$USERNAME/dotfiles/
+COPY --chown=$USERNAME:$USERNAME .pomdock-dotfiles/ /home/$USERNAME/dotfiles/
 
 # ── Vendored patched atuin build ───────────────────────────────────
 # Built from the vendored workspace in ./atuin so the container does not rely
 # on an untracked local binary.
-COPY --from=atuin-builder --chown=$USERNAME:$USERNAME --chmod=0755 /src/atuin/target/release/atuin /home/$USERNAME/.atuin/bin/atuin
+COPY --from=atuin-builder --chown=$USERNAME:$USERNAME /src/atuin/target/release/atuin /home/$USERNAME/.atuin/bin/atuin
+RUN chmod 0755 /home/$USERNAME/.atuin/bin/atuin
+
+# jsluice uses tree-sitter through CGO, so build it in a compiler image.
+# setup-pentest.sh checks GOPATH/bin and skips rebuilding it in the Kali stage.
+COPY --from=jsluice-builder --chown=$USERNAME:$USERNAME /go/bin/jsluice /home/$USERNAME/go/bin/jsluice
 
 # ── Pentest tools — single source of truth: setup-pentest.sh ──────
 RUN bash /tmp/setup-pentest.sh

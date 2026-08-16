@@ -184,7 +184,7 @@ if [[ -d /home/kali/dotfiles ]]; then
     pass "/home/kali/dotfiles mounted"
 else
     warn "/home/kali/dotfiles not mounted"
-    info "pentest.sh mounts \$DOTFILES_DIR (~/dotfiles) automatically"
+    info "pentest.sh mounts \$DOTFILES_DIR (~/pcm.dot by default) automatically"
 fi
 
 if [[ -d /home/kali/.local/share/atuin ]]; then

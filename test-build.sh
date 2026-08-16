@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="pcm-kali-pentest:test"
 CONTAINER="pcm-kali-pentest-test-$$"
-DOTFILES_DIR="${HOME}/dotfiles"
+DOTFILES_DIR="${PENTEST_DOTFILES_DIR:-${HOME}/pcm.dot}"
 
 NO_BUILD=false
 KEEP_ON_FAIL=false
@@ -64,12 +64,7 @@ if [[ "$NO_BUILD" == false ]]; then
     info "Building image: $IMAGE"
     info "(this takes ~10 min on first run)"
     echo ""
-    docker buildx build \
-        -f "${SCRIPT_DIR}/Dockerfile" \
-        --build-context dotfiles="${DOTFILES_DIR}" \
-        -t "$IMAGE" \
-        --load \
-        "${SCRIPT_DIR}"
+    "${SCRIPT_DIR}/scripts/build-image.sh" "$IMAGE" "$DOTFILES_DIR"
     echo ""
     ok "Image built: $IMAGE"
 else
