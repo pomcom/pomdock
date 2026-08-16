@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -123,14 +122,8 @@ type tuiModel struct {
 }
 
 func newTUI() tuiModel {
-	cols := []table.Column{
-		{Title: "  NAME", Width: 20},
-		{Title: "STATE", Width: 10},
-		{Title: "IP", Width: 18},
-		{Title: "WHONIX", Width: 8},
-	}
 	t := table.New(
-		table.WithColumns(cols),
+		table.WithColumns(vmTableColumns(80)),
 		table.WithFocused(true),
 		table.WithHeight(6),
 	)
@@ -181,13 +174,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tableH = 3
 		}
 		m.vmTable.SetHeight(tableH)
-		nameW := m.width - 10 - 18 - 8 - 8
-		if nameW < 16 {
-			nameW = 16
-		}
-		cols := m.vmTable.Columns()
-		cols[0].Width = nameW
-		m.vmTable.SetColumns(cols)
+		m.vmTable.SetRows(nil)
+		m.vmTable.SetColumns(vmTableColumns(m.width))
+		m.setVMRows()
 
 	case tickMsg:
 		m.spinner = (m.spinner + 1) % len(spinnerFrames)
@@ -223,28 +212,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case vmsMsg:
 		m.vms = []VM(msg)
 		m.lastRefresh = time.Now()
-		rows := make([]table.Row, len(m.vms))
-		for i, vm := range m.vms {
-			ip := vm.IP
-			if ip == "" {
-				ip = "—"
-			}
-			whonix := styleMuted.Render("no")
-			if vm.HasWhonix {
-				whonix = styleOK.Render("yes")
-			}
-			state := vm.State
-			if state == "shut off" {
-				state = "stopped"
-			}
-			rows[i] = table.Row{
-				"  " + vm.Name,
-				icon(state) + " " + state,
-				ip,
-				whonix,
-			}
-		}
-		m.vmTable.SetRows(rows)
+		m.setVMRows()
 		if m.pendingVM != "" {
 			for i, vm := range m.vms {
 				if vm.Name == m.pendingVM {
@@ -354,6 +322,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			emit(logMsg{level: "ok", text: fmt.Sprintf("Created VM '%s'", msg.name)}),
 			refreshAll(),
 		)
+		if msg.warning != "" {
+			cmds = append(cmds, emit(logMsg{level: "warn", text: msg.warning}))
+		}
+		if msg.openConsole {
+			cmds = append(cmds, consoleVMCmd(msg.name))
+		}
 
 	case containerCommandMsg:
 		m.busy = false
@@ -430,7 +404,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = (m.activeTab + 1) % 3
 		case "?":
 			cmds = append(cmds, emit(logMsg{level: "info",
-				text: "Keys: n new engagement; c command/SSH; C full shell/VM console; s/S start/stop; r RDP; R reset; D delete; w/W attach/detach Whonix; q quit"}))
+				text: "Keys: n new engagement; c command/SSH; C full shell/VM console; s/S start/stop; r RDP; f finalize Windows install; R reset; D delete; w/W attach/detach Whonix; q quit"}))
 
 		default:
 			switch m.activeTab {
@@ -464,6 +438,67 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.vmTable, tableCmd = m.vmTable.Update(msg)
 	cmds = append(cmds, tableCmd)
 	return m, tea.Batch(cmds...)
+}
+
+func (m *tuiModel) setVMRows() {
+	rows := make([]table.Row, len(m.vms))
+	width := m.width
+	if width == 0 {
+		width = 80
+	}
+	for i, vm := range m.vms {
+		profile := GuestProfileByID(vm.ProfileID)
+		ip := vm.IP
+		if ip == "" {
+			ip = "—"
+		}
+		whonix := styleMuted.Render("no")
+		if vm.HasWhonix {
+			whonix = styleOK.Render("yes")
+		}
+		state := vm.State
+		if state == "shut off" {
+			state = "stopped"
+		}
+		rows[i] = table.Row{"  " + vm.Name, profile.Label, icon(state) + " " + state}
+		if width >= 64 {
+			rows[i] = append(rows[i], ip)
+		}
+		if width >= 96 {
+			rows[i] = append(rows[i], whonix)
+		}
+	}
+	m.vmTable.SetRows(rows)
+}
+
+func vmTableColumns(width int) []table.Column {
+	if width < 64 {
+		nameWidth := width - 30 // profile + state + two cells of padding per column
+		if nameWidth < 12 {
+			nameWidth = 12
+		}
+		return []table.Column{
+			{Title: "  NAME", Width: nameWidth},
+			{Title: "PROFILE", Width: 14},
+			{Title: "STATE", Width: 10},
+		}
+	}
+	if width < 96 {
+		nameWidth := width - 49
+		return []table.Column{
+			{Title: "  NAME", Width: nameWidth},
+			{Title: "PROFILE", Width: 16},
+			{Title: "STATE", Width: 10},
+			{Title: "IP", Width: 15},
+		}
+	}
+	return []table.Column{
+		{Title: "  NAME", Width: width - 64},
+		{Title: "PROFILE", Width: 18},
+		{Title: "STATE", Width: 10},
+		{Title: "IP", Width: 18},
+		{Title: "WHONIX", Width: 8},
+	}
 }
 
 func quitWorkspaceCmd() tea.Cmd {
@@ -573,13 +608,15 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 				}))
 		}
 	case "R":
-		if name := m.selectedVMName(); name != "" && !m.busy {
+		if vm := m.selectedVM(); vm != nil && !m.busy {
 			m.busy = true
+			name := vm.Name
+			profile := GuestProfileByID(vm.ProfileID)
 			cmds = append(cmds,
 				emit(logMsg{level: "info", text: fmt.Sprintf("Resetting '%s'...", name)}),
 				bg(func() (string, error) {
 					_ = ForceOffVM(name)
-					if err := RevertSnapshot(name, snapshotName); err != nil {
+					if err := RevertSnapshot(name, profile.Snapshot); err != nil {
 						return "", err
 					}
 					return fmt.Sprintf("Reset '%s' — booting", name), StartVM(name)
@@ -592,8 +629,12 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 		}
 	case "c", "enter":
 		if vm := m.selectedVM(); vm != nil && vm.State == "running" {
+			profile := GuestProfileByID(vm.ProfileID)
+			if !profile.SupportsSSH {
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf("%s uses RDP or console, not SSH", profile.Label)}))
+			}
 			cmds = append(cmds,
-				emit(logMsg{level: "info", text: fmt.Sprintf("SSH → '%s' (%s)", vm.Name, vm.IP)}))
+				emit(logMsg{level: "info", text: fmt.Sprintf("SSH → %s@%s", profile.SSHUser, vm.IP)}))
 			return append(cmds, sshVMCmd(vm))
 		}
 	case "r":
@@ -619,8 +660,31 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 		if name := m.selectedVMName(); name != "" {
 			return append(cmds, consoleVMCmd(name))
 		}
+	case "f":
+		if vm := m.selectedVM(); vm != nil && !m.busy {
+			profile := GuestProfileByID(vm.ProfileID)
+			if profile.Family != "windows" {
+				return append(cmds, emit(logMsg{level: "warn", text: "Finalize only applies to Windows ISO installs"}))
+			}
+			m.busy = true
+			name := vm.Name
+			cmds = append(cmds,
+				emit(logMsg{level: "info", text: fmt.Sprintf("Finalizing Windows install '%s'...", name)}),
+				bg(func() (string, error) {
+					if err := FinalizeWindowsVM(name, profile.Snapshot); err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("Finalized '%s' and created snapshot '%s'", name, profile.Snapshot), nil
+				}),
+			)
+		}
 	case "w":
-		if name := m.selectedVMName(); name != "" && !m.busy {
+		if vm := m.selectedVM(); vm != nil && !m.busy {
+			name := vm.Name
+			profile := GuestProfileByID(vm.ProfileID)
+			if !profile.SupportsWhonix {
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf("Whonix routing is unavailable for %s", profile.Label)}))
+			}
 			if !NetworkExists(whonixNetwork) {
 				cmds = append(cmds, emit(logMsg{level: "err",
 					text: fmt.Sprintf("%s not found — run: pomdock vm whonix-gateway", whonixNetwork)}))
@@ -637,7 +701,12 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 			}
 		}
 	case "W":
-		if name := m.selectedVMName(); name != "" && !m.busy {
+		if vm := m.selectedVM(); vm != nil && !m.busy {
+			name := vm.Name
+			profile := GuestProfileByID(vm.ProfileID)
+			if !profile.SupportsWhonix {
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf("Whonix routing is unavailable for %s", profile.Label)}))
+			}
 			m.busy = true
 			cmds = append(cmds,
 				emit(logMsg{level: "info", text: fmt.Sprintf("Detaching Whonix from '%s'...", name)}),
@@ -851,7 +920,7 @@ func helpLineForTab(tab, width int) string {
 	if width < 112 {
 		return "  ↑↓ select  n new  s/S power  c ssh  r rdp  tab switch  ? help  q quit"
 	}
-	return "  ↑↓/jk select  n new  s/S power  c ssh  r rdp  C console  R reset  D delete  w/W whonix  tab switch  q quit"
+	return "  ↑↓ select  n new  s/S power  c ssh  r rdp  C console  f finish  R reset  D delete  w/W whonix  tab switch  q quit"
 }
 
 func formatLogLine(width int, timestamp, prefix, message string) string {
@@ -889,15 +958,21 @@ func sshVMCmd(vm *VM) tea.Cmd {
 	if vm.IP == "" {
 		return emit(logMsg{level: "err", text: fmt.Sprintf("'%s' has no IP", vm.Name)})
 	}
-	keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "kali")
+	profile := GuestProfileByID(vm.ProfileID)
+	if !profile.SupportsSSH {
+		return emit(logMsg{level: "err", text: fmt.Sprintf("%s profile does not provide SSH", profile.Label)})
+	}
+	keyPath := profileSSHKey(profile)
 	args := []string{}
-	if _, err := os.Stat(keyPath); err == nil {
-		args = append(args, "-i", keyPath)
+	if keyPath != "" {
+		if _, err := os.Stat(keyPath); err == nil {
+			args = append(args, "-i", keyPath)
+		}
 	}
 	args = append(args,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
-		"kali@"+vm.IP)
+		profile.SSHUser+"@"+vm.IP)
 	c := exec.Command("ssh", args...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return logMsg{level: "info", text: fmt.Sprintf("SSH '%s' ended", vm.Name)}

@@ -22,10 +22,11 @@ install: build
 	$(SUDO) install -m 755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 	$(SUDO) install -m 644 ../Dockerfile $(INSTALL_LIBDIR)/Dockerfile
 	$(SUDO) install -m 755 ../pentest.sh ../setup-pentest.sh $(INSTALL_LIBDIR)/
-	$(SUDO) install -d $(INSTALL_LIBDIR)/scripts $(INSTALL_LIBDIR)/tor-gateway $(INSTALL_LIBDIR)/kali-vm $(INSTALL_LIBDIR)/vendor/atuin
+	$(SUDO) install -d $(INSTALL_LIBDIR)/scripts $(INSTALL_LIBDIR)/tor-gateway $(INSTALL_LIBDIR)/kali-vm $(INSTALL_LIBDIR)/vm-profiles $(INSTALL_LIBDIR)/vendor/atuin
 	$(SUDO) cp -a ../scripts/. $(INSTALL_LIBDIR)/scripts/
 	$(SUDO) cp -a ../tor-gateway/. $(INSTALL_LIBDIR)/tor-gateway/
 	$(SUDO) cp -a ../kali-vm/. $(INSTALL_LIBDIR)/kali-vm/
+	$(SUDO) cp -a ../vm-profiles/. $(INSTALL_LIBDIR)/vm-profiles/
 	$(SUDO) cp -a ../vendor/atuin/. $(INSTALL_LIBDIR)/vendor/atuin/
 	@echo "Installed: $(DESTDIR)$(PREFIX)/bin/$(BINARY)"
 	@echo "Resources: $(INSTALL_LIBDIR)"

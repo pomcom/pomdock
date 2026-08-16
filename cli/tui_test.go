@@ -169,8 +169,67 @@ func TestVMCreateFormDefaultsToSelectedClone(t *testing.T) {
 func TestVMCreateFormWithoutVMDefaultsToFresh(t *testing.T) {
 	m := newTUI()
 	m.openVMCreateForm()
-	if m.vmCreateForm.mode != vmCreateFresh || m.vmCreateForm.source != "" {
+	if m.vmCreateForm.mode != vmCreateFresh || m.vmCreateForm.source != "" || m.vmCreateForm.profileID != "kali" {
 		t.Fatalf("unexpected empty-list VM form: %#v", m.vmCreateForm)
+	}
+}
+
+func TestVMCreateFormCyclesProfiles(t *testing.T) {
+	m := newTUI()
+	m.openVMCreateForm()
+	m.vmCreateForm.field = 1
+	m.cycleVMCreateSource(1)
+	if m.vmCreateForm.mode != vmCreateFresh || m.vmCreateForm.profileID != "ubuntu-lts" {
+		t.Fatalf("first profile cycle = %#v", m.vmCreateForm)
+	}
+	m.cycleVMCreateSource(-1)
+	if m.vmCreateForm.profileID != "kali" {
+		t.Fatalf("reverse profile cycle = %#v", m.vmCreateForm)
+	}
+}
+
+func TestWindowsCreateFormRequiresISO(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	scriptDir := filepath.Join(home, "vm-profiles")
+	if err := os.Mkdir(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptDir, "windows-iso-setup.sh"), []byte("#!/bin/bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := repoRoot
+	repoRoot = home
+	t.Cleanup(func() { repoRoot = oldRoot })
+	m := newTUI()
+	m.openVMCreateForm()
+	m.vmCreateForm.mode = vmCreateFresh
+	m.vmCreateForm.profileID = "windows-11-enterprise"
+	m.vmCreateForm.name.SetValue("win11-lab")
+	if fields := m.vmCreateFieldCount(); fields != 3 {
+		t.Fatalf("Windows form fields = %d, want 3", fields)
+	}
+	if _, err := m.vmCreateOptions(); err == nil {
+		t.Fatal("expected missing ISO to fail")
+	}
+	iso := filepath.Join(home, "windows.iso")
+	if err := os.WriteFile(iso, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.vmCreateForm.iso.SetValue(iso)
+	if _, err := m.vmCreateOptions(); err != nil {
+		t.Fatalf("valid Windows form failed: %v", err)
+	}
+}
+
+func TestVMCreateFormCyclesFromCloneToProfiles(t *testing.T) {
+	m := newTUI()
+	m.vms = []VM{{Name: "base"}}
+	m.vmTable.SetRows([]table.Row{{"  base", "Unassigned", "stopped", ""}})
+	m.openVMCreateForm()
+	m.cycleVMCreateSource(1)
+	if m.vmCreateForm.mode != vmCreateFresh || m.vmCreateForm.profileID != "kali" {
+		t.Fatalf("clone cycle = %#v", m.vmCreateForm)
 	}
 }
 
@@ -209,6 +268,73 @@ func TestRDPStartsFromVMTab(t *testing.T) {
 	}
 	if len(cmds) != 2 {
 		t.Fatalf("got %d commands, want progress log and RDP command", len(cmds))
+	}
+}
+
+func TestWindowsProfileDoesNotOfferSSH(t *testing.T) {
+	m := newTUI()
+	m.vms = []VM{{Name: "win11", State: "running", IP: "192.0.2.10", ProfileID: "windows-11-enterprise"}}
+	m.vmTable.SetRows([]table.Row{{"  win11", "Windows 11 Enterprise", "running", "192.0.2.10"}})
+	cmds := m.handleVMKey("c")
+	if len(cmds) != 1 {
+		t.Fatalf("got %d commands, want warning", len(cmds))
+	}
+	if m.busy {
+		t.Fatal("model should not become busy for unsupported SSH")
+	}
+	msg, ok := cmds[0]().(logMsg)
+	if !ok || msg.level != "warn" || !strings.Contains(msg.text, "RDP") {
+		t.Fatalf("unexpected message: %#v", msg)
+	}
+}
+
+func TestWindowsProfileBlocksWhonixMutation(t *testing.T) {
+	m := newTUI()
+	m.vms = []VM{{Name: "server", State: "shut off", ProfileID: "windows-server-2025"}}
+	m.vmTable.SetRows([]table.Row{{"  server", "Windows Server 2025", "stopped", ""}})
+	cmds := m.handleVMKey("w")
+	if len(cmds) != 1 || m.busy {
+		t.Fatalf("unsupported Whonix action: commands=%d busy=%v", len(cmds), m.busy)
+	}
+	msg, ok := cmds[0]().(logMsg)
+	if !ok || msg.level != "warn" || !strings.Contains(msg.text, "unavailable") {
+		t.Fatalf("unexpected message: %#v", msg)
+	}
+}
+
+func TestVMViewFitsTerminalWithProfileColumn(t *testing.T) {
+	for _, width := range []int{48, 80, 120} {
+		m := newTUI()
+		m.activeTab = 1
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = updated.(tuiModel)
+		updated, _ = m.Update(vmsMsg{{
+			Name: "provider_GOAD-DC01", State: "shut off", ProfileID: "windows-server-2025",
+		}})
+		m = updated.(tuiModel)
+		for _, line := range strings.Split(m.View(), "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("width %d: VM view line is %d cells: %q", width, got, line)
+			}
+		}
+	}
+}
+
+func TestVMViewResizesAcrossColumnLayouts(t *testing.T) {
+	m := newTUI()
+	m.activeTab = 1
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 48, Height: 24})
+	m = updated.(tuiModel)
+	updated, _ = m.Update(vmsMsg{{Name: "win11", State: "running", ProfileID: "windows-11-enterprise"}})
+	m = updated.(tuiModel)
+	for _, width := range []int{120, 80, 48} {
+		updated, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = updated.(tuiModel)
+		for _, line := range strings.Split(m.View(), "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Fatalf("width %d: resized VM view line is %d cells: %q", width, got, line)
+			}
+		}
 	}
 }
 

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`cli/` contains the Go 1.24 Cobra CLI and Bubble Tea TUI. Commands delegate Docker work to `pentest.sh` and VM work to `kali-vm/`. Image provisioning lives in `Dockerfile` and `setup-pentest.sh`; the custom Tor sidecar is in `tor-gateway/`. Root-level `test*.sh` scripts provide integration checks. `scripts/` holds build helpers. `vendor/atuin/` is patched upstream source; avoid unrelated edits there.
+`cli/` contains the Go 1.24 Cobra CLI and Bubble Tea TUI. Commands delegate Docker work to `pentest.sh`, Kali VM work to `kali-vm/`, and Linux/Windows guest creation to `vm-profiles/`. Image provisioning lives in `Dockerfile` and `setup-pentest.sh`; the custom Tor sidecar is in `tor-gateway/`. Root-level `test*.sh` scripts provide integration checks. `scripts/` holds build helpers. `vendor/atuin/` is patched upstream source; avoid unrelated edits there.
 
 ## Build, Test, and Development Commands
 
@@ -11,7 +11,7 @@
 - `cd cli && go vet ./...`: run standard Go static checks.
 - `./test-build.sh`: build the Kali image, verify installed tools, and tear down the test container.
 - `./test-network.sh`: validate plain Docker networking; add `--vpn FILE`, `--whonix`, or `--vm NAME` for affected modes.
-- `bash -n pentest.sh setup-pentest.sh test*.sh kali-vm/*.sh`: syntax-check shell changes.
+- `bash -n pentest.sh setup-pentest.sh test*.sh kali-vm/*.sh vm-profiles/*.sh`: syntax-check shell changes.
 
 Docker tests require a working daemon. VM tests require libvirt and a running VM; Whonix modes may start supporting images.
 

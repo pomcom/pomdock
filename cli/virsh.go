@@ -18,6 +18,7 @@ type VM struct {
 	Name      string
 	State     string
 	IP        string
+	ProfileID string
 	HasWhonix bool
 }
 
@@ -47,6 +48,7 @@ func ListVMs() ([]VM, error) {
 			Name:      name,
 			State:     state,
 			IP:        ip,
+			ProfileID: GetVMProfileID(name),
 			HasWhonix: vmHasWhonixNIC(name),
 		})
 	}
@@ -177,6 +179,50 @@ func RevertSnapshot(name, snap string) error {
 	return err
 }
 
+func FinalizeWindowsVM(name, snap string) error {
+	state, err := GetVMState(name)
+	if err != nil {
+		return err
+	}
+	if state != "shut off" {
+		return fmt.Errorf("shut down Windows before finalizing (current state: %s)", state)
+	}
+	if snapshots, _ := virsh("snapshot-list", name, "--name"); slicesContainLine(snapshots, snap) {
+		return fmt.Errorf("snapshot %q already exists", snap)
+	}
+
+	blocks, err := virsh("domblklist", name, "--details")
+	if err != nil {
+		return fmt.Errorf("list VM media: %w", err)
+	}
+	for _, line := range strings.Split(blocks, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[1] != "cdrom" {
+			continue
+		}
+		if out, err := virsh("detach-disk", name, fields[2], "--config"); err != nil {
+			return fmt.Errorf("detach installer media %s: %w: %s", fields[2], err, out)
+		}
+	}
+	if out, err := virsh("snapshot-create-as", name, snap,
+		"--description", "Windows installation ready", "--atomic"); err != nil {
+		return fmt.Errorf("create snapshot: %w: %s", err, out)
+	}
+	if err := StartVM(name); err != nil {
+		return fmt.Errorf("snapshot created, but VM could not be restarted: %w", err)
+	}
+	return nil
+}
+
+func slicesContainLine(output, want string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
 func CloneVM(src, dst string) error {
 	cmd := exec.Command("virt-clone", "--connect", libvirtURI,
 		"--original", src, "--name", dst,
@@ -234,6 +280,10 @@ func WaitForVMIP(name string, timeout time.Duration) (string, error) {
 }
 
 func PrepareVMRDP(name string, timeout time.Duration) (*exec.Cmd, string, error) {
+	profile := GuestProfileByID(GetVMProfileID(name))
+	if !profile.SupportsRDP {
+		return nil, "", fmt.Errorf("%s profile does not provide RDP", profile.Label)
+	}
 	rdpBin := ""
 	if _, err := exec.LookPath("xfreerdp3"); err == nil {
 		rdpBin = "xfreerdp3"
@@ -256,7 +306,7 @@ func PrepareVMRDP(name string, timeout time.Duration) (*exec.Cmd, string, error)
 	if err != nil {
 		return nil, "", err
 	}
-	return exec.Command(rdpBin, "/v:"+ip, "/u:kali",
+	return exec.Command(rdpBin, "/v:"+ip, "/u:"+profile.RDPUser,
 		"/dynamic-resolution", "/gfx:avc444", "+clipboard", "/cert:tofu"), ip, nil
 }
 
