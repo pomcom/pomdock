@@ -5,12 +5,12 @@ backends:
 
 - **Docker** — a Kali container with VPN kill-switch (gluetun) and Tor routing
   (custom Whonix-style gateway), for day-to-day engagements.
-- **libvirt/KVM** — a full Kali VM with i3, for GUI-heavy tooling (Burp, browser,
-  RDP-based labs) or when a container isn't isolated enough.
+- **libvirt/KVM** — disposable Kali, Linux server, and Windows engagement VMs
+  for GUI-heavy tooling, enterprise labs, or stronger isolation.
 
 The CLI is a thin wrapper: `pomdock docker ...` shells out to `pentest.sh`,
-`pomdock vm ...` shells out to the scripts in `kali-vm/`. Both are plain bash
-and can be run standalone if you don't want the Go binary.
+`pomdock vm ...` uses the scripts in `kali-vm/` and `vm-profiles/`. The
+provisioners are plain Bash and can also be run standalone.
 
 ---
 
@@ -26,7 +26,9 @@ Set `PREFIX` to use another location, or set `POMDOCK_ROOT` when running the
 binary against a source checkout explicitly.
 
 Requires Go (build only), Docker, `tmux`, and — for the VM side — `qemu-kvm`,
-`libvirt-daemon-system`, `libvirt-clients`, `virt-viewer`, `libguestfs-tools`.
+`libvirt-daemon-system`, `libvirt-clients`, `virt-viewer`, `libguestfs-tools`,
+`genisoimage`, and `curl`. Windows guests additionally require `swtpm` and a
+Secure Boot-capable OVMF package.
 
 ### TUI workflow
 
@@ -50,12 +52,24 @@ sudo apt install qemu-kvm libvirt-daemon-system libvirt-clients virt-viewer libg
 sudo adduser $USER libvirt   # log out and back in after
 ```
 
-### SSH key for VMs
+### VM profiles and SSH keys
 
-VM SSH/RDP/Whonix-attach all expect an ed25519 key at exactly `~/.ssh/kali`:
+Pomdock stores a guest profile in libvirt metadata so connection actions use the
+right protocol and username. Existing untagged VMs appear as `Unassigned` and
+keep the legacy Kali connection defaults until assigned:
+
+```bash
+pomdock vm profile ubuntu-test ubuntu-lts
+pomdock vm profile win11-testing windows-11-enterprise
+pomdock vm profile provider_GOAD-DC01 windows-server-2025
+```
+
+Kali expects an ed25519 key at `~/.ssh/kali`; Linux cloud profiles use
+`~/.ssh/pomdock`. Create them with:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/kali -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/pomdock -N ""
 ```
 
 If present, `vm create` injects `~/.ssh/kali.pub` into the VM automatically and
@@ -93,6 +107,13 @@ tearing down and rebuilding the sidecar as needed.
 Named engagements (`--name`) get their own container, sidecars, and loot dir
 at `~/pentest/<name>`, plus a separate atuin history — run several engagements
 side by side without them colliding.
+
+New engagement shells identify themselves in the Starship hostname segment as
+`<name>-<route>`, for example `acme-vpn` or `internal-tor-vpn`. Pomdock also sets
+`POMDOCK_MACHINE`, `POMDOCK_KIND`, and `POMDOCK_ROUTE` for custom prompt modules.
+This does not replace or reconfigure Atuin, fzf, zsh plugins, or aliases from
+the mounted dotfiles. Existing containers must be recreated to gain the new
+hostname and environment variables.
 
 ### Dotfiles
 
@@ -170,13 +191,20 @@ so one bad package name or unreachable release doesn't kill the whole build.
 ## VMs
 
 ```bash
-pomdock vm create [name]   # downloads current Kali QEMU image, provisions, snapshots
+pomdock vm create [name]                         # Kali by default
+pomdock vm create ubuntu-base --profile ubuntu-lts
+pomdock vm create debian-base --profile debian-stable
+pomdock vm create rocky-base --profile rocky-9
+pomdock vm create win11-lab --profile windows-11-enterprise --iso ~/Downloads/Win11.iso
+pomdock vm create dc-lab --profile windows-server-2025 --iso ~/Downloads/Server2025.iso
 pomdock vm list
+pomdock vm profile <name> [profile] # show or assign guest behavior
 pomdock vm start <name>
 pomdock vm stop  <name>
 pomdock vm ssh   <name>
 pomdock vm rdp   <name>
 pomdock vm console <name> # SPICE (virt-viewer) or serial console fallback
+pomdock vm finalize <name> # finish a powered-off Windows installation
 pomdock vm reset <name>    # revert to post-setup snapshot
 pomdock vm clone / delete / ip <name>
 
@@ -187,6 +215,30 @@ pomdock vm whonix-detach <name>
 ```
 
 ### What `vm create` does
+
+Pomdock can automatically create Kali, Ubuntu 24.04 LTS, Debian 13, and Rocky
+Linux 9 VMs. The Linux server profiles download official cloud images, verify
+the current publisher checksum, inject `~/.ssh/pomdock.pub` with cloud-init,
+install the QEMU guest agent, and create a clean `post-setup` snapshot. Downloads
+are cached under `~/.cache/pomdock` and revalidated when an upstream `latest`
+image changes.
+
+Cloud-image guests are minimal enterprise test servers. They do not receive
+the operator's dotfiles or Kali tooling.
+
+Windows profiles create an 8 GiB, 4-vCPU, 80 GiB installer VM from a
+user-supplied official Microsoft ISO. Pomdock configures UEFI Secure Boot, TPM
+2.0, SPICE, an emulated SATA disk, and an `e1000e` NIC so Windows Setup does not
+depend on extra drivers. A local `~/pcm.virt/virtio-win*.iso` is attached when
+available. In the TUI, creation opens the graphical console automatically.
+Install Windows, create the `pomdock` user on Windows 11 (Server uses
+`Administrator`), enable Remote Desktop, and shut the guest down. Then press
+`f` in the VM tab or run `pomdock vm finalize <name>` to remove installation
+media, create the `post-setup` snapshot, and restart it. Press `r` for RDP and
+`R` to reset the VM later. Pomdock does not download proprietary Microsoft
+media or bypass license requirements.
+
+For the default Kali profile:
 
 1. Downloads the current official Kali QEMU image (cached for reuse).
 2. Defines and starts the VM in `qemu:///system` libvirt.
@@ -245,13 +297,16 @@ pomdock tui   # or just: pomdock
 | `C` | Persistent Docker shell window / VM console |
 | `s` / `S` | Start / stop the selected Docker container or VM |
 | `r` / `R` | VM RDP / reset to snapshot |
+| `f` | Finalize a powered-off Windows installation |
 | `w` / `W` | Attach / detach VM Whonix routing |
 | `D` | Delete container or VM; close shell (confirmation required) |
 | `?` | help |
 | `q` / `Ctrl+C` | quit |
 
 In the VM tab, `n` clones the selected VM by default for a fast engagement
-workspace; switch the form to **Fresh Kali** to run the full provisioning flow.
+workspace. Move to **Source** and use Left/Right to choose Kali, Ubuntu, Debian,
+Rocky, Windows Server, or Windows 11 instead. Windows choices add an ISO path
+field.
 Press `r` to start the selected VM if necessary, wait for its address, and
 launch `xfreerdp3` (or `xfreerdp`) with dynamic resolution and clipboard support.
 
