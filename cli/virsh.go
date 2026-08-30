@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -279,19 +283,32 @@ func WaitForVMIP(name string, timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("timeout waiting for IP of %s", name)
 }
 
+func WaitForTCP(ip string, port int, timeout time.Duration) error {
+	return waitForTCP(ip, port, timeout, func(address string, dialTimeout time.Duration) error {
+		conn, err := net.DialTimeout("tcp", address, dialTimeout)
+		if err != nil {
+			return err
+		}
+		return conn.Close()
+	})
+}
+
+func waitForTCP(ip string, port int, timeout time.Duration, probe func(string, time.Duration) error) error {
+	address := net.JoinHostPort(ip, strconv.Itoa(port))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := probe(address, 2*time.Second); err == nil {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for %s", address)
+}
+
 func PrepareVMRDP(name string, timeout time.Duration) (*exec.Cmd, string, error) {
 	profile := GuestProfileByID(GetVMProfileID(name))
 	if !profile.SupportsRDP {
 		return nil, "", fmt.Errorf("%s profile does not provide RDP", profile.Label)
-	}
-	rdpBin := ""
-	if _, err := exec.LookPath("xfreerdp3"); err == nil {
-		rdpBin = "xfreerdp3"
-	} else if _, err := exec.LookPath("xfreerdp"); err == nil {
-		rdpBin = "xfreerdp"
-	}
-	if rdpBin == "" {
-		return nil, "", fmt.Errorf("xfreerdp3 not found — install: sudo apt install freerdp3-x11")
 	}
 	state, err := GetVMState(name)
 	if err != nil {
@@ -306,8 +323,79 @@ func PrepareVMRDP(name string, timeout time.Duration) (*exec.Cmd, string, error)
 	if err != nil {
 		return nil, "", err
 	}
-	return exec.Command(rdpBin, "/v:"+ip, "/u:"+profile.RDPUser,
-		"/dynamic-resolution", "/gfx:avc444", "+clipboard", "/cert:tofu"), ip, nil
+	if err := WaitForTCP(ip, 3389, timeout); err != nil {
+		return nil, "", fmt.Errorf("RDP service is not ready: %w", err)
+	}
+	cmd, err := rdpClientCommand(profile, ip)
+	return cmd, ip, err
+}
+
+func rdpClientCommand(profile GuestProfile, ip string) (*exec.Cmd, error) {
+	preference := strings.ToLower(strings.TrimSpace(os.Getenv("POMDOCK_RDP_CLIENT")))
+	if preference != "" && preference != "xfreerdp" && preference != "xfreerdp3" && preference != "remmina" {
+		return nil, fmt.Errorf("unsupported POMDOCK_RDP_CLIENT %q", preference)
+	}
+
+	clients := []string{"xfreerdp3", "xfreerdp", "remmina"}
+	if preference != "" {
+		clients = []string{preference}
+	}
+	for _, client := range clients {
+		if _, err := exec.LookPath(client); err != nil {
+			continue
+		}
+		if client == "remmina" {
+			return exec.Command("remmina", "--no-tray-icon", "--disable-news", "--disable-stats",
+				"-c", fmt.Sprintf("rdp://%s@%s", profile.RDPUser, ip)), nil
+		}
+		return exec.Command(client, "/v:"+ip, "/u:"+profile.RDPUser,
+			"/dynamic-resolution", "/gfx:avc444", "+clipboard", "/cert:tofu", "/log-level:ERROR"), nil
+	}
+	if preference != "" {
+		return nil, fmt.Errorf("configured RDP client %q not found", preference)
+	}
+	return nil, fmt.Errorf("no RDP client found; install FreeRDP or Remmina")
+}
+
+func isFreeRDPCommand(cmd *exec.Cmd) bool {
+	name := filepath.Base(cmd.Path)
+	return name == "xfreerdp" || name == "xfreerdp3"
+}
+
+func launchDesktopClient(cmd *exec.Cmd, startupTimeout time.Duration) error {
+	logFile, err := os.CreateTemp("", "pomdock-rdp-*.log")
+	if err != nil {
+		return err
+	}
+	logPath := logFile.Name()
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		_ = os.Remove(logPath)
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		waitErr := cmd.Wait()
+		_ = logFile.Close()
+		if waitErr != nil {
+			output, _ := os.ReadFile(logPath)
+			message := strings.TrimSpace(string(output))
+			if message != "" {
+				waitErr = fmt.Errorf("%w: %s", waitErr, message)
+			}
+		}
+		_ = os.Remove(logPath)
+		done <- waitErr
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(startupTimeout):
+		return nil
+	}
 }
 
 func vmNames() []string {
