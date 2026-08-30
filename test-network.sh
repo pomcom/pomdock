@@ -149,12 +149,14 @@ start_gluetun() {
         docker run -d --name "$name" \
             --cap-add NET_ADMIN \
             --device /dev/net/tun \
+            -e HEALTH_TARGET_ADDRESSES=1.1.1.1:443 \
             "${gluetun_args[@]}" \
             "$GLUETUN_IMAGE" >/dev/null
     else
         docker run -d --name "$name" \
             --cap-add NET_ADMIN \
             --device /dev/net/tun \
+            -e HEALTH_TARGET_ADDRESSES=1.1.1.1:443 \
             -v "${vpn_dir}/${vpn_base}:/gluetun/custom.conf:ro" \
             -e VPN_SERVICE_PROVIDER=custom \
             -e VPN_TYPE=openvpn \
@@ -201,7 +203,7 @@ start_whonix() {
         --cap-add NET_RAW
         --device /dev/net/tun
     )
-    [[ -n "$net_arg" ]] && run_args+=(--network "$net_arg")
+    [[ -n "$net_arg" ]] && run_args+=(--network "$net_arg" -e STACK_MODE=1)
 
     docker run -d "${run_args[@]}" "$WHONIX_IMAGE" >/dev/null
 
@@ -545,11 +547,13 @@ if [[ "$RUN_STACK" == true ]]; then
     GT="${RUN_ID}-stack-gluetun"
     WN="${RUN_ID}-stack-whonix"
     if start_gluetun "$VPN_FILE" "$GT" && start_whonix "$WN" "container:$GT"; then
-        # Stack: Tor exits via the VPN, so check.torproject.org sees the VPN exit (IsTor=false)
-        run_check "stack — Kali → Tor → VPN" "container:$WN" "false" "true"
+        # Stack: VPN hides Tor usage from the ISP, but traffic still exits via a
+        # real Tor relay — check.torproject.org should see IsTor=true, same as
+        # Tor-only mode, just carried over the VPN instead of the raw uplink.
+        run_check "stack — Kali → Tor → VPN" "container:$WN" "true" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN" "$GT"
     else
-        teardown_stack "$WN" "$GT"
+        [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN" "$GT"
         MODE_RESULTS+=("${RED}✗${RESET} stack — sidecar failed to start")
         OVERALL_PASS=false
     fi
