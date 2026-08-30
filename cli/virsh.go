@@ -171,9 +171,28 @@ func ForceOffVM(name string) error { _, err := virsh("destroy", name); return er
 
 func DeleteVM(name string) error {
 	_, _ = virsh("destroy", name)
-	if _, err := virsh("undefine", name, "--remove-all-storage"); err != nil {
-		_, err2 := virsh("undefine", name)
-		return err2
+
+	// --remove-all-storage only works for storage libvirt itself manages
+	// (a storage pool volume). Our disks are plain qcow2 files created
+	// directly by the provisioning scripts, so libvirt refuses to touch
+	// them ("not managed by libvirt") — remove the disk file ourselves.
+	// --snapshots-metadata is required too: undefine otherwise refuses any
+	// domain with a snapshot, and every profile leaves a post-setup one.
+	if _, err := virsh("undefine", name, "--snapshots-metadata", "--nvram"); err != nil {
+		return err
+	}
+
+	disk := filepath.Join(imageDir, name+".qcow2")
+	if err := os.Remove(disk); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		// Disk is chown'd to libvirt-qemu at creation time, so a plain
+		// remove needs elevated rights. Only try non-interactively —
+		// this can run from the TUI, which has no terminal to prompt on.
+		if _, sudoErr := exec.Command("sudo", "-n", "rm", "-f", disk).CombinedOutput(); sudoErr != nil {
+			return fmt.Errorf("undefined '%s' but could not remove disk %s (owned by libvirt-qemu): remove it manually with sudo", name, disk)
+		}
 	}
 	return nil
 }
