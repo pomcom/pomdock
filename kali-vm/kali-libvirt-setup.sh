@@ -12,6 +12,7 @@ KALI_IMAGE="kali-linux-${KALI_VERSION}-qemu-amd64"
 KALI_URL="https://cdimage.kali.org/current/${KALI_IMAGE}.7z"
 IMAGE_DIR="/var/lib/libvirt/images"
 DOWNLOAD_DIR="${POMDOCK_DOWNLOAD_DIR:-${HOME}/.cache/pomdock}"
+LOG_DIR="${POMDOCK_LOG_DIR:-${HOME}/.cache/pomdock/logs}"
 VM_NAME="${1:-kali-base}"
 VM_DISK="${IMAGE_DIR}/${VM_NAME}.qcow2"
 VM_RAM=16384
@@ -21,12 +22,29 @@ KALI_USER="kali"
 KALI_PASSWORD="kali"
 KALI_KEY="${HOME}/.ssh/kali"
 KALI_KEY_PUB="${KALI_KEY}.pub"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POMDOCK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ATUIN_BUILD_SCRIPT="${POMDOCK_ROOT}/scripts/build-atuin.sh"
+ATUIN_BIN="${DOWNLOAD_DIR}/atuin-pomdock-absolute-datetime"
+
+[[ "$VM_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "✗ Invalid VM name: ${VM_NAME}"; exit 1; }
+mkdir -p "$DOWNLOAD_DIR" "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/${VM_NAME}-setup.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "→ Setup log: ${LOG_FILE}"
 
 if virsh dominfo "${VM_NAME}" >/dev/null 2>&1; then
     echo "✗ VM '${VM_NAME}' exists already."
     echo "  Use another name: ./tools/kali-vm/kali-libvirt-setup.sh kali-lab-1"
     exit 1
 fi
+
+if [[ ! -x "${ATUIN_BUILD_SCRIPT}" ]]; then
+    echo "✗ Patched Atuin build helper not found: ${ATUIN_BUILD_SCRIPT}"
+    exit 1
+fi
+echo "→ Building patched Atuin (absolute timestamps)..."
+"${ATUIN_BUILD_SCRIPT}" "${ATUIN_BIN}"
 
 if [[ ! -f "${KALI_KEY}" ]] && ! command -v sshpass >/dev/null 2>&1; then
     echo "✗ Neither SSH key (${KALI_KEY}) nor sshpass found."
@@ -46,7 +64,6 @@ trap 'kill "${SUDO_KEEPER}" 2>/dev/null || true' EXIT
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
-mkdir -p "${DOWNLOAD_DIR}"
 KALI_7Z="${DOWNLOAD_DIR}/${KALI_IMAGE}.7z"
 KALI_QCOW2="${DOWNLOAD_DIR}/${KALI_IMAGE}.qcow2"
 
@@ -218,15 +235,19 @@ fi
 
 # ── Run setup script ──────────────────────────────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "→ Copying and running kali-i3-setup.sh..."
+echo "→ Copying Kali setup and patched Atuin..."
 "${SCP_CMD[@]}" \
     "${SCRIPT_DIR}/kali-i3-setup.sh" \
     "${KALI_USER}@${VM_IP}:~/kali-i3-setup.sh"
+"${SCP_CMD[@]}" \
+    "${ATUIN_BIN}" \
+    "${KALI_USER}@${VM_IP}:~/atuin-pomdock"
 
 "${SSH_CMD[@]}" "${KALI_USER}@${VM_IP}" \
-    "echo ${KALI_PASSWORD} | sudo -S bash ~/kali-i3-setup.sh"
+    "install -d ~/.atuin/bin && install -m 0755 ~/atuin-pomdock ~/.atuin/bin/atuin && rm ~/atuin-pomdock && printf '%s\\n' 'export PATH=\"\$HOME/.atuin/bin:\$PATH\"' > ~/.atuin/bin/env"
+
+"${SSH_CMD[@]}" "${KALI_USER}@${VM_IP}" \
+    "printf '%s\\n' '${KALI_PASSWORD}' | sudo -S -v && export PATH=\"\$HOME/.atuin/bin:\$PATH\" && bash ~/kali-i3-setup.sh"
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
 # Internal snapshot (no --disk-only): reliable for virsh snapshot-revert.
