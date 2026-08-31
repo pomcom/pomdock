@@ -34,6 +34,12 @@ sudo apt-get update -qq
 echo 'kali ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/kali-nopasswd
 sudo chmod 440 /etc/sudoers.d/kali-nopasswd
 
+# The base Kali QEMU image ships with its builder's timezone, not the operator's.
+# The i3status bar below already assumes Europe/Berlin — set the system to match so
+# `date`, logs, and Atuin's absolute-timestamp history aren't silently offset from it.
+echo "→ Setting system timezone to Europe/Berlin..."
+sudo timedatectl set-timezone Europe/Berlin
+
 echo "→ Installing i3, XFCE4, and base packages..."
 sudo apt-get install -y \
     i3 i3status rofi picom feh \
