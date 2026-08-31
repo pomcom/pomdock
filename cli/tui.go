@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -27,10 +28,9 @@ type doneMsg struct {
 	err  error
 }
 type containerStartedMsg struct {
-	name         string
-	err          error
-	focusConsole bool
-	openShell    bool
+	name      string
+	err       error
+	openShell bool
 }
 type containerCreatedMsg struct {
 	name string
@@ -42,6 +42,13 @@ type containerCommandMsg struct {
 	output  string
 	cwd     string
 	err     error
+}
+type containerTransferMsg struct {
+	name        string
+	direction   transferDirection
+	source      string
+	destination string
+	err         error
 }
 
 // ── Tab styles ────────────────────────────────────────────────────────────────
@@ -95,7 +102,7 @@ type tuiModel struct {
 	containers    []Container
 	dockerCursor  int
 	createForm    containerCreateForm
-	commandInput  textinput.Model
+	transferForm  containerTransferForm
 	console       containerConsole
 	pendingSelect string
 
@@ -126,7 +133,10 @@ func newTUI() tuiModel {
 		table.WithColumns(vmTableColumns(80)),
 		table.WithFocused(true),
 		table.WithHeight(6),
+		table.WithWidth(80),
 	)
+	// The VM tab owns "f" for finalizing Windows installs.
+	t.KeyMap.PageDown.SetKeys("pgdown", " ")
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -135,21 +145,13 @@ func newTUI() tuiModel {
 		Foreground(colorMauve).
 		Bold(true)
 	s.Selected = s.Selected.
-		Foreground(colorText).
-		Background(colorOverlay).
-		Bold(false)
+		Foreground(colorMauve).
+		Bold(true)
 	t.SetStyles(s)
-	commandInput := textinput.New()
-	commandInput.Prompt = ""
-	commandInput.Placeholder = "run a command"
-	commandInput.CharLimit = 4096
-
 	return tuiModel{
-		vmTable:      t,
-		commandInput: commandInput,
+		vmTable: t,
 		console: containerConsole{
 			output: make(map[string][]string),
-			cwd:    make(map[string]string),
 		},
 		createForm:   newContainerCreateForm(),
 		vmCreateForm: newVMCreateForm(),
@@ -174,6 +176,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tableH = 3
 		}
 		m.vmTable.SetHeight(tableH)
+		m.vmTable.SetWidth(m.width)
 		m.vmTable.SetRows(nil)
 		m.vmTable.SetColumns(vmTableColumns(m.width))
 		m.setVMRows()
@@ -210,6 +213,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case vmsMsg:
+		selectedName := m.selectedVMName()
 		m.vms = []VM(msg)
 		m.lastRefresh = time.Now()
 		m.setVMRows()
@@ -218,6 +222,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if vm.Name == m.pendingVM {
 					m.vmTable.SetCursor(i)
 					m.pendingVM = ""
+					break
+				}
+			}
+		} else if selectedName != "" {
+			for i, vm := range m.vms {
+				if vm.Name == selectedName {
+					m.vmTable.SetCursor(i)
 					break
 				}
 			}
@@ -284,9 +295,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		cmds = append(cmds, emit(logMsg{level: "ok", text: fmt.Sprintf("Started '%s'", msg.name)}))
-		if msg.focusConsole {
-			cmds = append(cmds, m.focusContainerConsole(msg.name))
-		}
 		if msg.openShell {
 			m.busy = true
 			cmds = append(cmds, openPersistentShellCmd(msg.name))
@@ -304,7 +312,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.pendingSelect = msg.name
-		cmds = append(cmds, m.focusContainerConsole(msg.name))
 		m.createForm = newContainerCreateForm()
 		cmds = append(cmds,
 			emit(logMsg{level: "ok", text: fmt.Sprintf("Created '%s'", msg.name)}),
@@ -329,19 +336,54 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, consoleVMCmd(msg.name))
 		}
 
+	case vmProvisionStartedMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.vmCreateForm.active = true
+			m.vmCreateForm.err = msg.err.Error()
+			cmds = append(cmds,
+				emit(logMsg{level: "err", text: fmt.Sprintf("Could not start VM setup for '%s': %v", msg.name, msg.err)}),
+				m.focusVMCreateField(),
+			)
+			break
+		}
+		m.vmCreateForm = newVMCreateForm()
+		cmds = append(cmds, emit(logMsg{level: "ok", text: fmt.Sprintf(
+			"Provisioning %s '%s' in tmux window %s; Ctrl+B 0 returns here",
+			msg.profile.Label, msg.name, msg.window)}))
+
 	case containerCommandMsg:
 		m.busy = false
 		m.appendConsoleResult(msg)
 
+	case containerTransferMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.transferForm.active = true
+			m.transferForm.err = msg.err.Error()
+			cmds = append(cmds,
+				emit(logMsg{level: "err", text: fmt.Sprintf("File transfer failed: %v", msg.err)}),
+				m.focusTransferField(),
+			)
+			break
+		}
+		m.transferForm = containerTransferForm{}
+		verb := "Uploaded"
+		if msg.direction == transferDownload {
+			verb = "Downloaded"
+		}
+		cmds = append(cmds, emit(logMsg{level: "ok", text: fmt.Sprintf(
+			"%s %s to %s", verb, msg.source, msg.destination)}))
+
 	case shellReadyMsg:
 		m.busy = false
 		if msg.err != nil {
-			cmds = append(cmds, emit(logMsg{level: "err", text: fmt.Sprintf("Could not open shell for '%s': %v", msg.container, msg.err)}))
+			cmds = append(cmds, emit(logMsg{level: "err", text: fmt.Sprintf("Could not open shell for '%s': %v", msg.target, msg.err)}))
 			break
 		}
 		cmds = append(cmds,
-			emit(logMsg{level: "ok", text: fmt.Sprintf("Shell window ready for '%s'", msg.container)}),
-			selectShellWindowCmd(msg.window, msg.container),
+			emit(logMsg{level: "ok", text: fmt.Sprintf("%s shell window ready for '%s'", msg.kind, msg.target)}),
+			selectShellWindowCmd(msg.window, msg.target),
 			refreshAll(),
 		)
 
@@ -354,8 +396,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateVMCreateForm(msg)...)
 			return m, tea.Batch(cmds...)
 		}
-		if m.commandInput.Focused() {
-			cmds = append(cmds, m.updateContainerConsole(msg)...)
+		if m.transferForm.active {
+			cmds = append(cmds, m.updateContainerTransferForm(msg)...)
 			return m, tea.Batch(cmds...)
 		}
 		if m.confirm != noConfirm {
@@ -395,16 +437,26 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, quitWorkspaceCmd()
 		case "1":
-			m.activeTab = 0
+			if m.activeTab != 0 {
+				m.activeTab = 0
+				cmds = append(cmds, tea.ClearScreen)
+			}
 		case "2":
-			m.activeTab = 1
+			if m.activeTab != 1 {
+				m.activeTab = 1
+				cmds = append(cmds, tea.ClearScreen)
+			}
 		case "3":
-			m.activeTab = 2
+			if m.activeTab != 2 {
+				m.activeTab = 2
+				cmds = append(cmds, tea.ClearScreen)
+			}
 		case "tab":
 			m.activeTab = (m.activeTab + 1) % 3
+			cmds = append(cmds, tea.ClearScreen)
 		case "?":
 			cmds = append(cmds, emit(logMsg{level: "info",
-				text: "Keys: n new engagement; c command/SSH; C full shell/VM console; s/S start/stop; r RDP; f finalize Windows install; R reset; D delete; w/W attach/detach Whonix; q quit"}))
+				text: "Keys: n new engagement; Docker i identity, p ports, t Tor, u/d copy, C shell; VM c SSH, r RDP, C console; s/S start/stop; D delete; q quit"}))
 
 		default:
 			switch m.activeTab {
@@ -427,10 +479,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vmCreateForm.name, inputCmd = m.vmCreateForm.name.Update(msg)
 			cmds = append(cmds, inputCmd)
 		}
-		if m.commandInput.Focused() {
-			var inputCmd tea.Cmd
-			m.commandInput, inputCmd = m.commandInput.Update(msg)
-			cmds = append(cmds, inputCmd)
+		if m.transferForm.active {
+			cmds = append(cmds, m.updateTransferInput(msg))
 		}
 	}
 
@@ -469,6 +519,9 @@ func (m *tuiModel) setVMRows() {
 		}
 	}
 	m.vmTable.SetRows(rows)
+	if len(rows) > 0 && m.vmTable.Cursor() < 0 {
+		m.vmTable.SetCursor(0)
+	}
 }
 
 func vmTableColumns(width int) []table.Column {
@@ -518,30 +571,50 @@ func (m *tuiModel) handleDockerKey(key string) []tea.Cmd {
 	case "up", "k":
 		if m.dockerCursor > 0 {
 			m.dockerCursor--
+			cmds = append(cmds, tea.ClearScreen)
 		}
 	case "down", "j":
 		if m.dockerCursor < len(m.containers)-1 {
 			m.dockerCursor++
+			cmds = append(cmds, tea.ClearScreen)
 		}
-	case "c", "enter":
+	case "c", "enter", "i":
 		if c := m.selectedContainer(); c != nil && !m.busy {
 			if c.Status != "running" {
-				m.busy = true
-				cmds = append(cmds,
-					emit(logMsg{level: "info", text: fmt.Sprintf("Starting '%s'...", c.Name)}),
-					startContainerCmd(c.Name, true, false),
-				)
-				break
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf(
+					"Start '%s' before running engagement checks", c.Name)}))
 			}
-			return append(cmds, m.focusContainerConsole(c.Name))
+			m.busy = true
+			return append(cmds, runContainerToolCmd(c.Name, "identity"))
+		}
+	case "p", "t":
+		if c := m.selectedContainer(); c != nil && c.Status == "running" && !m.busy {
+			tool := "ports"
+			if key == "t" {
+				tool = "tor"
+			}
+			m.busy = true
+			return append(cmds, runContainerToolCmd(c.Name, tool))
+		}
+	case "u", "d":
+		if c := m.selectedContainer(); c != nil && c.Status == "running" && !m.busy {
+			direction := transferUpload
+			if key == "d" {
+				direction = transferDownload
+			}
+			return append(cmds, m.openContainerTransferForm(c.Name, direction))
 		}
 	case "C":
 		if c := m.selectedContainer(); c != nil && !m.busy {
+			if c.Legacy {
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf(
+					"'%s' predates contextual shells; stop and start it once to upgrade (loot is kept)", c.Name)}))
+			}
 			if c.Status != "running" {
 				m.busy = true
 				cmds = append(cmds,
 					emit(logMsg{level: "info", text: fmt.Sprintf("Starting '%s'...", c.Name)}),
-					startContainerCmd(c.Name, false, true),
+					startContainerCmd(c.Name, true),
 				)
 				break
 			}
@@ -586,9 +659,13 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 			cmds = append(cmds, m.openVMCreateForm())
 		}
 	case "up", "k":
-		m.vmTable.MoveUp(1)
+		if m.vmTable.Cursor() > 0 {
+			cmds = append(cmds, tea.ClearScreen)
+		}
 	case "down", "j":
-		m.vmTable.MoveDown(1)
+		if m.vmTable.Cursor() < len(m.vms)-1 {
+			cmds = append(cmds, tea.ClearScreen)
+		}
 	case "s":
 		if name := m.selectedVMName(); name != "" && !m.busy {
 			m.busy = true
@@ -633,12 +710,17 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 			if !profile.SupportsSSH {
 				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf("%s uses RDP or console, not SSH", profile.Label)}))
 			}
+			m.busy = true
 			cmds = append(cmds,
-				emit(logMsg{level: "info", text: fmt.Sprintf("SSH → %s@%s", profile.SSHUser, vm.IP)}))
-			return append(cmds, sshVMCmd(vm))
+				emit(logMsg{level: "info", text: fmt.Sprintf("Opening VM shell for %s@%s...", profile.SSHUser, vm.IP)}))
+			return append(cmds, openVMShellCmd(*vm))
 		}
 	case "r":
 		if vm := m.selectedVM(); vm != nil && !m.busy {
+			if vm.ProfileID == "" || vm.ProfileID == fallbackGuestProfileID {
+				return append(cmds, emit(logMsg{level: "warn", text: fmt.Sprintf(
+					"Assign a VM profile before using RDP: pomdock vm profile %s <profile>", vm.Name)}))
+			}
 			m.busy = true
 			name := vm.Name
 			cmds = append(cmds,
@@ -648,11 +730,18 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 					if err != nil {
 						return "RDP failed", err
 					}
-					if err := cmd.Start(); err != nil {
+					if isFreeRDPCommand(cmd) {
+						window, err := startVMRDPWindow(name, cmd)
+						if err != nil {
+							return "RDP failed", err
+						}
+						return fmt.Sprintf("RDP '%s' opened at %s via %s in tmux window %s",
+							name, ip, filepath.Base(cmd.Path), window), nil
+					}
+					if err := launchDesktopClient(cmd, 1500*time.Millisecond); err != nil {
 						return "RDP failed", err
 					}
-					_ = cmd.Process.Release()
-					return fmt.Sprintf("RDP '%s' launched at %s", name, ip), nil
+					return fmt.Sprintf("RDP '%s' opened at %s via %s", name, ip, filepath.Base(cmd.Path)), nil
 				}),
 			)
 		}
@@ -779,6 +868,11 @@ func (m tuiModel) View() string {
 		panel = m.shellsView()
 		helpLine = helpLineForTab(2, w)
 	}
+	panelHeight := m.height - 14
+	if panelHeight < 3 {
+		panelHeight = 3
+	}
+	panel = fitPanel(panel, w, panelHeight)
 
 	// Confirm overlay
 	confirmLine := ""
@@ -824,9 +918,33 @@ func (m tuiModel) View() string {
 	}, "\n")
 }
 
+func fitPanel(view string, width, height int) string {
+	lines := strings.Split(view, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			line = ansi.Truncate(line, width, "")
+		}
+		padding := width - lipgloss.Width(line)
+		if padding > 0 {
+			line += strings.Repeat(" ", padding)
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m tuiModel) dockerView() string {
 	if m.createForm.active {
 		return m.containerCreateFormView()
+	}
+	if m.transferForm.active {
+		return m.containerTransferFormView()
 	}
 	return m.dockerWorkspaceView()
 }
@@ -890,13 +1008,12 @@ func bg(fn func() (string, error)) tea.Cmd {
 	}
 }
 
-func startContainerCmd(name string, focusConsole, openShell bool) tea.Cmd {
+func startContainerCmd(name string, openShell bool) tea.Cmd {
 	return func() tea.Msg {
 		return containerStartedMsg{
-			name:         name,
-			err:          StartContainer(name),
-			focusConsole: focusConsole,
-			openShell:    openShell,
+			name:      name,
+			err:       StartContainer(name),
+			openShell: openShell,
 		}
 	}
 }
@@ -907,9 +1024,12 @@ func helpLineForTab(tab, width int) string {
 	}
 	if tab == 0 {
 		if width < 88 {
-			return "  ↑↓ select  n new  c cmd  C shell  s/S start/stop  ? help  q quit"
+			return "  ↑↓ select  n new  i info  C shell  s/S power  ? help  q quit"
 		}
-		return "  ↑↓/jk select  n new  c command  C shell  s/S start/stop  D delete  tab switch  ? help  q quit"
+		if width < 112 {
+			return "  ↑↓ select  n new  i info  p ports  t tor  C shell  s/S power  tab switch  q quit"
+		}
+		return "  ↑↓ select  n new  i info  p ports  t tor  u/d copy  C shell  s/S power  D delete  tab switch  q quit"
 	}
 	if tab == 2 {
 		if width < 100 {
@@ -952,31 +1072,6 @@ func wrapWords(text string, width int) []string {
 		}
 	}
 	return lines
-}
-
-func sshVMCmd(vm *VM) tea.Cmd {
-	if vm.IP == "" {
-		return emit(logMsg{level: "err", text: fmt.Sprintf("'%s' has no IP", vm.Name)})
-	}
-	profile := GuestProfileByID(vm.ProfileID)
-	if !profile.SupportsSSH {
-		return emit(logMsg{level: "err", text: fmt.Sprintf("%s profile does not provide SSH", profile.Label)})
-	}
-	keyPath := profileSSHKey(profile)
-	args := []string{}
-	if keyPath != "" {
-		if _, err := os.Stat(keyPath); err == nil {
-			args = append(args, "-i", keyPath)
-		}
-	}
-	args = append(args,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		profile.SSHUser+"@"+vm.IP)
-	c := exec.Command("ssh", args...)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return logMsg{level: "info", text: fmt.Sprintf("SSH '%s' ended", vm.Name)}
-	})
 }
 
 func consoleVMCmd(name string) tea.Cmd {
