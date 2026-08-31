@@ -247,7 +247,7 @@ echo "→ Copying Kali setup and patched Atuin..."
     "install -d ~/.atuin/bin && install -m 0755 ~/atuin-pomdock ~/.atuin/bin/atuin && rm ~/atuin-pomdock && printf '%s\\n' 'export PATH=\"\$HOME/.atuin/bin:\$PATH\"' > ~/.atuin/bin/env"
 
 "${SSH_CMD[@]}" "${KALI_USER}@${VM_IP}" \
-    "printf '%s\\n' '${KALI_PASSWORD}' | sudo -S -v && export PATH=\"\$HOME/.atuin/bin:\$PATH\" && bash ~/kali-i3-setup.sh"
+    "printf '%s\\n' '${KALI_PASSWORD}' | sudo -S -v && export PATH=\"\$HOME/.atuin/bin:\$PATH\" && bash ~/kali-i3-setup.sh '${VM_NAME}'"
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
 # Internal snapshot (no --disk-only): reliable for virsh snapshot-revert.
