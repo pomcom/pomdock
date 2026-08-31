@@ -5,6 +5,10 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# pomdock's VM name, if invoked via kali-libvirt-setup.sh. Falls back to "kali"
+# for standalone use (scp + ssh kali@<ip> bash kali-i3-setup.sh, no args).
+VM_NAME="${1:-kali}"
+
 warn() { printf '⚠ %s\n' "$*" >&2; }
 
 optional_apt_install() {
@@ -39,6 +43,12 @@ sudo chmod 440 /etc/sudoers.d/kali-nopasswd
 # `date`, logs, and Atuin's absolute-timestamp history aren't silently offset from it.
 echo "→ Setting system timezone to Europe/Berlin..."
 sudo timedatectl set-timezone Europe/Berlin
+
+# Every Kali VM otherwise ships with the same generic base-image hostname —
+# indistinguishable from every other one. Use pomdock's own name for this VM so
+# the prompt (see starship.toml below) says which machine you're actually on.
+echo "→ Setting hostname to ${VM_NAME}..."
+sudo hostnamectl set-hostname "$VM_NAME"
 
 echo "→ Installing i3, XFCE4, and base packages..."
 sudo apt-get install -y \
@@ -355,6 +365,19 @@ $golang\
 $cmd_duration\
 $line_break\
 $character"""
+
+## Always show user@host — VM shells, SSH, RDP terminals, console: same rule.
+[username]
+show_always = true
+format = "[$user]($style)@"
+style_user = "bold white"
+style_root = "bold red"
+
+[hostname]
+ssh_only = false
+format = "[$hostname]($style) "
+style = "bold #7f98a3"
+disabled = false
 
 [package]
 disabled = true
