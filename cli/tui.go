@@ -138,12 +138,18 @@ func newTUI() tuiModel {
 	// The VM tab owns "f" for finalizing Windows installs.
 	t.KeyMap.PageDown.SetKeys("pgdown", " ")
 	s := table.DefaultStyles()
+	// DefaultStyles() gives Header/Cell 1 column of padding on each side.
+	// vmTableColumns() sizes columns to the exact rendered width with no
+	// slack for that, so every cell ends up 2 columns wider than its
+	// column.Width — strip it so the layout math is accurate.
 	s.Header = s.Header.
+		Padding(0, 0).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorMuted).
 		BorderBottom(true).
 		Foreground(colorMauve).
 		Bold(true)
+	s.Cell = s.Cell.Padding(0, 0)
 	s.Selected = s.Selected.
 		Foreground(colorMauve).
 		Bold(true)
