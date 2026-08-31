@@ -3,6 +3,27 @@
 # Run inside VM as kali user:
 #   scp tools/kali-vm/kali-i3-setup.sh kali@<ip>:~ && ssh kali@<ip> bash kali-i3-setup.sh
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+warn() { printf '⚠ %s\n' "$*" >&2; }
+
+optional_apt_install() {
+    local label=$1 package
+    shift
+    if sudo apt-get install -y "$@"; then
+        return 0
+    fi
+    warn "${label} package group failed; retrying packages individually."
+    for package in "$@"; do
+        sudo apt-get install -y "$package" || warn "Optional package unavailable: ${package}"
+    done
+}
+
+# Older failed runs may have written Kali's unsupported suite into this source.
+MULLVAD_LIST=/etc/apt/sources.list.d/mullvad.list
+if [[ -f "$MULLVAD_LIST" ]] && grep -q 'repository.mullvad.net.*kali-rolling' "$MULLVAD_LIST"; then
+    sudo sed -i 's/ kali-rolling / sid /' "$MULLVAD_LIST"
+fi
 
 # ── Packages ──────────────────────────────────────────────────────────────────
 
@@ -32,24 +53,36 @@ sudo apt-get install -y \
 
 echo "→ Installing Mullvad VPN..."
 if ! command -v mullvad &>/dev/null; then
-    curl -fsSL https://repository.mullvad.net/deb/mullvad-keyring.asc \
-        | sudo gpg --dearmor -o /usr/share/keyrings/mullvad-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/mullvad-keyring.gpg arch=$(dpkg --print-architecture)] https://repository.mullvad.net/deb/stable $(lsb_release -cs) main" \
-        | sudo tee /etc/apt/sources.list.d/mullvad.list
-    sudo apt-get update -qq
-    sudo apt-get install -y mullvad-vpn
+    if curl -fsSL https://repository.mullvad.net/deb/mullvad-keyring.asc \
+        | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/mullvad-keyring.gpg \
+        && echo "deb [signed-by=/usr/share/keyrings/mullvad-keyring.gpg arch=$(dpkg --print-architecture)] https://repository.mullvad.net/deb/stable sid main" \
+        | sudo tee "$MULLVAD_LIST" \
+        && sudo apt-get update -qq \
+        && sudo apt-get install -y mullvad-vpn; then
+        echo "✓ Mullvad VPN installed."
+    else
+        warn "Mullvad installation failed; continuing without the optional desktop client."
+        sudo rm -f "$MULLVAD_LIST"
+        sudo apt-get update -qq || true
+    fi
 fi
 
 # ── Sublime Text ──────────────────────────────────────────────────────────────
 
 echo "→ Installing Sublime Text..."
 if ! command -v subl &>/dev/null; then
-    wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg \
-        | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sublimehq-archive.gpg
-    echo "deb https://download.sublimetext.com/ apt/stable/" \
-        | sudo tee /etc/apt/sources.list.d/sublime-text.list
-    sudo apt-get update -qq
-    sudo apt-get install -y sublime-text
+    if wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg \
+        | sudo gpg --batch --yes --dearmor -o /etc/apt/trusted.gpg.d/sublimehq-archive.gpg \
+        && echo "deb https://download.sublimetext.com/ apt/stable/" \
+        | sudo tee /etc/apt/sources.list.d/sublime-text.list \
+        && sudo apt-get update -qq \
+        && sudo apt-get install -y sublime-text; then
+        echo "✓ Sublime Text installed."
+    else
+        warn "Sublime Text installation failed; continuing without it."
+        sudo rm -f /etc/apt/sources.list.d/sublime-text.list
+        sudo apt-get update -qq || true
+    fi
 fi
 
 # ── Golang ────────────────────────────────────────────────────────────────────
@@ -61,28 +94,31 @@ fi
 
 # ── Atuin ─────────────────────────────────────────────────────────────────────
 
-echo "→ Installing atuin..."
-if ! command -v atuin &>/dev/null; then
-    if ! sudo apt-get install -y atuin; then
-        # Fallback installer, kept non-interactive.
-        curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | bash -s -- --yes
-    fi
+echo "→ Verifying patched atuin..."
+if [[ ! -x "$HOME/.atuin/bin/atuin" ]]; then
+    echo "✗ Patched Atuin was not staged by the Pomdock VM provisioner." >&2
+    exit 1
 fi
+"$HOME/.atuin/bin/atuin" --version
 
 # ── Penelope ──────────────────────────────────────────────────────────────────
 
 echo "→ Installing Penelope (reverse shell handler)..."
-pipx install penelope-shell-handler 2>/dev/null || pip3 install --user penelope-shell-handler
+pipx install penelope-shell-handler 2>/dev/null \
+    || pip3 install --user penelope-shell-handler \
+    || warn "Penelope installation failed."
 
 # ── autotiling ────────────────────────────────────────────────────────────────
 
 echo "→ Installing autotiling..."
-pipx install autotiling 2>/dev/null || pip3 install --user autotiling
+pipx install autotiling 2>/dev/null \
+    || pip3 install --user autotiling \
+    || warn "Autotiling installation failed."
 
 # ── AutoRecon dependencies ────────────────────────────────────────────────────
 
 echo "→ Installing AutoRecon apt dependencies..."
-sudo apt-get install -y \
+optional_apt_install "AutoRecon dependencies" \
     seclists curl dnsrecon enum4linux feroxbuster gobuster \
     impacket-scripts nbtscan nikto nmap onesixtyone oscanner \
     redis-tools smbclient smbmap snmp sslscan sipvicious \
@@ -92,16 +128,19 @@ sudo apt-get install -y \
 
 echo "→ Installing AutoRecon..."
 pipx install git+https://github.com/Tib3rius/AutoRecon.git 2>/dev/null \
-    || pip3 install --user git+https://github.com/Tib3rius/AutoRecon.git
+    || pip3 install --user git+https://github.com/Tib3rius/AutoRecon.git \
+    || warn "AutoRecon installation failed."
 
 # ── fzf + zoxide + syncthing ──────────────────────────────────────────────────
 
 echo "→ Installing fzf, zoxide, syncthing, starship, rlwrap, xclip..."
 sudo apt-get install -y fzf zoxide syncthing rlwrap xclip
-curl -sS https://starship.rs/install.sh | sh -s -- --yes
+mkdir -p "$HOME/.local/bin"
+curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin" \
+    || warn "Starship installation failed."
 
 echo "→ Installing goshs..."
-sudo apt-get install -y goshs
+optional_apt_install "goshs" goshs
 
 # ── PATH additions ────────────────────────────────────────────────────────────
 
@@ -128,8 +167,8 @@ alias pbcopy='xclip -selection clipboard'
 alias pbpaste='xclip -selection clipboard -o'
 alias nc='rlwrap nc'
 
-# Force starship prompt in zsh sessions.
-eval "$(starship init zsh)"
+# Force starship prompt in zsh sessions when installation succeeded.
+command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
 
 # zsh-syntax-highlighting — colors commands as you type (known=green, unknown=red)
 [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] \
@@ -275,17 +314,17 @@ mods = "Control|Shift"
 action = "Copy"
 
 [[keyboard.bindings]]
-key = "Equal"
+key = "="
 mods = "Control"
 action = "IncreaseFontSize"
 
 [[keyboard.bindings]]
-key = "Minus"
+key = "-"
 mods = "Control"
 action = "DecreaseFontSize"
 
 [[keyboard.bindings]]
-key = "Key0"
+key = "0"
 mods = "Control"
 action = "ResetFontSize"
 EOF
