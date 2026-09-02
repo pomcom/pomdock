@@ -81,6 +81,10 @@ var guestProfiles = map[string]GuestProfile{
 		ID: "windows-server-2019", Label: "Windows Server 2019", Family: "windows", Provisioner: "windows-iso", RDPUser: "Administrator",
 		Snapshot: snapshotName, SupportsRDP: true,
 	},
+	"windows-server-2022": {
+		ID: "windows-server-2022", Label: "Windows Server 2022", Family: "windows", Provisioner: "windows-iso", RDPUser: "Administrator",
+		Snapshot: snapshotName, SupportsRDP: true,
+	},
 	"windows-11-enterprise": {
 		ID: "windows-11-enterprise", Label: "Windows 11 Enterprise", Family: "windows", Provisioner: "windows-iso", RDPUser: "pomdock",
 		Snapshot: snapshotName, SupportsRDP: true,
@@ -89,7 +93,7 @@ var guestProfiles = map[string]GuestProfile{
 
 var provisionableGuestProfileIDs = []string{
 	"kali", "ubuntu-lts", "debian-stable", "rocky-9",
-	"windows-server-2025", "windows-server-2019", "windows-11-enterprise",
+	"windows-server-2025", "windows-server-2022", "windows-server-2019", "windows-11-enterprise",
 }
 
 func ProvisionableGuestProfiles() []GuestProfile {
