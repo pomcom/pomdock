@@ -13,3 +13,10 @@ vendor/atuin/.atuin/
 # compiled binaries — build from source (see cli/Makefile)
 kali-vm/vm
 cli/pomdock
+
+# VPN configs / key material — never belongs in this repo
+*.ovpn
+*.conf
+!vendor/atuin/**/*.conf
+mullvad*.zip
+*.wireguard.zip
