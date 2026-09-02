@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -20,15 +22,35 @@ func TestShellWindowNameIsStableAndSafe(t *testing.T) {
 }
 
 func TestParseShellSessions(t *testing.T) {
-	sessions := parseShellSessions("@1\t0\t1\tdashboard\t\n@3\t2\t0\tshell-bravo\tbravo\n@2\t1\t1\tshell-alpha\talpha\n")
+	sessions := parseShellSessions("@1\t0\t1\tdashboard\t\t\t\n" +
+		"@2\t1\t1\tshell-alpha\t\t\talpha\n" +
+		"@3\t2\t0\tssh-lab\tvm\tlab\t\n")
 	if len(sessions) != 2 {
 		t.Fatalf("got %d sessions", len(sessions))
 	}
-	if sessions[0].Container != "alpha" || sessions[1].Container != "bravo" {
-		t.Fatalf("sessions not sorted by container: %#v", sessions)
+	if sessions[0].Target != "alpha" || sessions[0].Kind != "docker" ||
+		sessions[1].Target != "lab" || sessions[1].Kind != "vm" {
+		t.Fatalf("sessions not parsed in window order: %#v", sessions)
 	}
 	if !sessions[0].Active || sessions[0].ID != "@2" {
 		t.Fatalf("active window not parsed: %#v", sessions[0])
+	}
+}
+
+func TestVMSSHArgsUseProfileKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(home, ".ssh", "pomdock")
+	if err := os.WriteFile(key, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := vmSSHArgs(GuestProfileByID("ubuntu-lts"), "192.0.2.10")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-i "+key) || !strings.Contains(joined, "ubuntu@192.0.2.10") {
+		t.Fatalf("unexpected SSH args: %v", args)
 	}
 }
 

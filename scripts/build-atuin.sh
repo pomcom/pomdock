@@ -24,6 +24,11 @@ build_from_image() {
     command -v docker >/dev/null 2>&1 || return 1
     docker image inspect pcm-kali-pentest >/dev/null 2>&1 || return 1
 
+    local variant
+    variant="$(docker image inspect pcm-kali-pentest \
+        --format '{{index .Config.Labels "io.pomdock.atuin.variant"}}' 2>/dev/null)"
+    [[ "${variant}" == "absolute-datetime" ]] || return 1
+
     local cid=""
     cid="$(docker create pcm-kali-pentest)"
     trap '[[ -n "${cid}" ]] && docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
@@ -37,7 +42,7 @@ if build_from_source; then
 elif build_from_image; then
     chmod 0755 "${OUT_BIN}"
 else
-    echo "Failed to build atuin locally and could not extract it from pcm-kali-pentest" >&2
+    echo "Failed to build patched atuin and no labelled patched image is available" >&2
     exit 1
 fi
 

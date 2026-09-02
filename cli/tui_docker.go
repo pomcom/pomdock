@@ -51,6 +51,23 @@ type containerCreateForm struct {
 	err     string
 }
 
+type transferDirection int
+
+const (
+	transferUpload transferDirection = iota
+	transferDownload
+)
+
+type containerTransferForm struct {
+	active      bool
+	direction   transferDirection
+	field       int
+	container   string
+	source      textinput.Model
+	destination textinput.Model
+	err         string
+}
+
 func newContainerCreateForm() containerCreateForm {
 	name := textinput.New()
 	name.Prompt = ""
@@ -64,11 +81,7 @@ func newContainerCreateForm() containerCreateForm {
 }
 
 type containerConsole struct {
-	target       string
-	output       map[string][]string
-	cwd          map[string]string
-	history      []string
-	historyIndex int
+	output map[string][]string
 }
 
 var dockerNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -197,82 +210,105 @@ func createContainerCmd(opts ContainerCreateOptions) tea.Cmd {
 	}
 }
 
-func (m *tuiModel) focusContainerConsole(name string) tea.Cmd {
-	m.console.target = name
-	if m.console.cwd[name] == "" {
-		m.console.cwd[name] = "/home/kali"
-	}
-	m.console.historyIndex = len(m.console.history)
-	return m.commandInput.Focus()
-}
-
-func (m *tuiModel) updateContainerConsole(msg tea.KeyMsg) []tea.Cmd {
-	switch msg.String() {
-	case "esc":
-		m.commandInput.Blur()
-		return nil
-	case "ctrl+l":
-		m.console.output[m.console.target] = nil
-		return nil
-	case "up":
-		if m.console.historyIndex > 0 {
-			m.console.historyIndex--
-			m.commandInput.SetValue(m.console.history[m.console.historyIndex])
-			m.commandInput.CursorEnd()
-		}
-		return nil
-	case "down":
-		if m.console.historyIndex < len(m.console.history)-1 {
-			m.console.historyIndex++
-			m.commandInput.SetValue(m.console.history[m.console.historyIndex])
-		} else {
-			m.console.historyIndex = len(m.console.history)
-			m.commandInput.SetValue("")
-		}
-		m.commandInput.CursorEnd()
-		return nil
-	case "enter":
-		command := strings.TrimSpace(m.commandInput.Value())
-		if command == "" || m.busy {
-			return nil
-		}
-		name := m.console.target
-		m.console.output[name] = append(m.console.output[name], "$ "+command)
-		m.console.history = append(m.console.history, command)
-		m.console.historyIndex = len(m.console.history)
-		m.commandInput.SetValue("")
-		m.busy = true
-		return []tea.Cmd{runContainerCommandCmd(name, m.console.cwd[name], command)}
-	}
-	var cmd tea.Cmd
-	m.commandInput, cmd = m.commandInput.Update(msg)
-	return []tea.Cmd{cmd}
-}
-
-func runContainerCommandCmd(name, cwd, command string) tea.Cmd {
+func runContainerToolCmd(name, tool string) tea.Cmd {
 	return func() tea.Msg {
-		output, nextCWD, err := RunContainerCommand(name, cwd, command)
+		output, err := RunContainerTool(name, tool)
 		return containerCommandMsg{
-			name: name, command: command, output: output, cwd: nextCWD, err: err,
+			name: name, command: tool, output: output, err: err,
 		}
 	}
 }
 
 func (m *tuiModel) appendConsoleResult(msg containerCommandMsg) {
+	lines := []string{"[" + strings.ToUpper(msg.command) + "]"}
 	output := strings.ReplaceAll(ansi.Strip(msg.output), "\r\n", "\n")
 	if output != "" {
-		m.console.output[msg.name] = append(m.console.output[msg.name], strings.Split(output, "\n")...)
+		lines = append(lines, strings.Split(output, "\n")...)
 	}
 	if msg.err != nil {
-		m.console.output[msg.name] = append(m.console.output[msg.name], "[command failed] "+msg.err.Error())
+		lines = append(lines, "[check failed] "+msg.err.Error())
 	}
-	if msg.cwd != "" {
-		m.console.cwd[msg.name] = msg.cwd
-	}
-	lines := m.console.output[msg.name]
 	if len(lines) > 300 {
-		m.console.output[msg.name] = lines[len(lines)-300:]
+		lines = lines[len(lines)-300:]
 	}
+	m.console.output[msg.name] = lines
+}
+
+func (m *tuiModel) openContainerTransferForm(container string, direction transferDirection) tea.Cmd {
+	source := textinput.New()
+	source.Prompt = ""
+	source.CharLimit = 2048
+	destination := textinput.New()
+	destination.Prompt = ""
+	destination.CharLimit = 2048
+	if direction == transferUpload {
+		source.Placeholder = "~/loot/report.txt"
+		destination.SetValue("/home/kali/pentest/")
+	} else {
+		source.SetValue("/home/kali/pentest/")
+		destination.SetValue("~/pentest/" + container + "/")
+	}
+	m.transferForm = containerTransferForm{
+		active: true, direction: direction, container: container,
+		source: source, destination: destination,
+	}
+	return m.focusTransferField()
+}
+
+func (m *tuiModel) focusTransferField() tea.Cmd {
+	m.transferForm.source.Blur()
+	m.transferForm.destination.Blur()
+	if m.transferForm.field == 0 {
+		return m.transferForm.source.Focus()
+	}
+	return m.transferForm.destination.Focus()
+}
+
+func (m *tuiModel) updateContainerTransferForm(msg tea.KeyMsg) []tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.transferForm = containerTransferForm{}
+		return nil
+	case "tab", "shift+tab":
+		m.transferForm.field = (m.transferForm.field + 1) % 2
+		return []tea.Cmd{m.focusTransferField()}
+	case "enter":
+		source := strings.TrimSpace(m.transferForm.source.Value())
+		destination := strings.TrimSpace(m.transferForm.destination.Value())
+		if source == "" || destination == "" {
+			m.transferForm.err = "source and destination are required"
+			return nil
+		}
+		form := m.transferForm
+		m.transferForm.active = false
+		m.busy = true
+		return []tea.Cmd{func() tea.Msg {
+			var err error
+			if form.direction == transferUpload {
+				err = CopyToContainer(form.container, source, destination)
+			} else {
+				err = CopyFromContainer(form.container, source, destination)
+			}
+			return containerTransferMsg{
+				name: form.container, direction: form.direction,
+				source: source, destination: destination, err: err,
+			}
+		}}
+	}
+	return []tea.Cmd{m.updateTransferInput(msg)}
+}
+
+func (m *tuiModel) updateTransferInput(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	if m.transferForm.field == 0 {
+		m.transferForm.source, cmd = m.transferForm.source.Update(msg)
+	} else {
+		m.transferForm.destination, cmd = m.transferForm.destination.Update(msg)
+	}
+	if _, ok := msg.(tea.KeyMsg); ok {
+		m.transferForm.err = ""
+	}
+	return cmd
 }
 
 func (m tuiModel) containerCreateFormView() string {
@@ -327,6 +363,37 @@ func (m tuiModel) containerCreateFormView() string {
 		help = "  tab field   enter create   esc cancel"
 	}
 	lines = append(lines, "", styleMuted.Render(help))
+	return strings.Join(lines, "\n")
+}
+
+func (m tuiModel) containerTransferFormView() string {
+	source := m.transferForm.source
+	destination := m.transferForm.destination
+	inputWidth := m.width - 22
+	if inputWidth < 16 {
+		inputWidth = 16
+	}
+	source.Width, destination.Width = inputWidth, inputWidth
+	marker := func(field int) string {
+		if m.transferForm.field == field {
+			return styleAccent.Render("▶")
+		}
+		return " "
+	}
+	title := "UPLOAD TO " + m.transferForm.container
+	if m.transferForm.direction == transferDownload {
+		title = "DOWNLOAD FROM " + m.transferForm.container
+	}
+	lines := []string{
+		styleAccent.Copy().Bold(true).Render("  " + title),
+		"",
+		fmt.Sprintf("  %s  %-11s %s", marker(0), "Source", source.View()),
+		fmt.Sprintf("  %s  %-11s %s", marker(1), "Destination", destination.View()),
+	}
+	if m.transferForm.err != "" {
+		lines = append(lines, "", styleError.Render("  "+m.transferForm.err))
+	}
+	lines = append(lines, "", styleMuted.Render("  tab field   enter transfer   esc cancel"))
 	return strings.Join(lines, "\n")
 }
 
@@ -396,6 +463,9 @@ func (m tuiModel) dockerListView(width, height int) string {
 		}
 		name := padRight(ansi.Truncate(container.Name, nameWidth, "…"), nameWidth)
 		status := containerStatusLabel(container.Status, 9)
+		if container.Legacy {
+			status = styleWarn.Render(padRight("upgrade", 9))
+		}
 		lines = append(lines, fmt.Sprintf("%s%s %s  %s  %s  %s",
 			cursor, icon(container.Status), name, status, vpn, tor))
 	}
@@ -405,19 +475,29 @@ func (m tuiModel) dockerListView(width, height int) string {
 func (m tuiModel) containerConsoleView(width, height int) string {
 	container := m.selectedContainer()
 	if container == nil {
-		return styleMuted.Render("  COMMAND\n\n  Select or create a container.")
+		return styleMuted.Render("  ENGAGEMENT\n\n  Select or create a container.")
 	}
 	name := container.Name
-	focused := m.commandInput.Focused() && m.console.target == name
-	title := "  COMMAND · " + name
-	if focused {
-		title = styleAccent.Copy().Bold(true).Render(title)
-	} else {
-		title = styleMuted.Render(title)
-	}
+	title := styleAccent.Copy().Bold(true).Render("  ENGAGEMENT · " + name)
 	lines := []string{title, styleMuted.Render(strings.Repeat("─", width))}
 
-	bodyHeight := height - 3
+	menu := []string{
+		"  " + styleAccent.Render("i") + "  Identity and egress",
+		"  " + styleAccent.Render("p") + "  Listening and published ports",
+		"  " + styleAccent.Render("t") + "  Tor exit check",
+		"  " + styleAccent.Render("u") + "  Upload file",
+		"  " + styleAccent.Render("d") + "  Download file",
+		"  " + styleAccent.Render("C") + "  Full tmux shell",
+	}
+	if width < 42 {
+		menu[0] = "  i  Identity / egress"
+		menu[1] = "  p  Ports"
+		menu[2] = "  t  Tor check"
+	}
+	lines = append(lines, menu...)
+	lines = append(lines, styleMuted.Render(strings.Repeat("─", width)))
+
+	bodyHeight := height - len(menu) - 4
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
@@ -433,31 +513,9 @@ func (m tuiModel) containerConsoleView(width, height int) string {
 	}
 
 	if container.Status != "running" {
-		lines = append(lines, styleMuted.Render("  Start the container to run commands."))
-		return strings.Join(lines, "\n")
+		lines = append(lines, styleMuted.Render("  Start the container to run checks."))
 	}
-	cwd := m.console.cwd[name]
-	if cwd == "" {
-		cwd = "/home/kali"
-	}
-	prompt := fmt.Sprintf("  %s:%s $ ", name, shortContainerPath(cwd))
-	input := m.commandInput
-	input.Width = width - lipgloss.Width(prompt) - 1
-	if input.Width < 8 {
-		input.Width = 8
-	}
-	lines = append(lines, styleAccent.Render(prompt)+input.View())
 	return strings.Join(lines, "\n")
-}
-
-func shortContainerPath(path string) string {
-	if path == "/home/kali" {
-		return "~"
-	}
-	if strings.HasPrefix(path, "/home/kali/") {
-		return "~/" + strings.TrimPrefix(path, "/home/kali/")
-	}
-	return path
 }
 
 func wrapConsoleLines(lines []string, width int) []string {

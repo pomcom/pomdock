@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Container represents a Docker container relevant to pomdock.
@@ -18,6 +20,7 @@ type Container struct {
 	Image  string
 	HasVPN bool // a gluetun sidecar is running for this engagement
 	HasTor bool // a whonix/tor sidecar is running for this engagement
+	Legacy bool // created before contextual prompt metadata was introduced
 }
 
 type dockerPS struct {
@@ -76,6 +79,7 @@ func ListContainers() ([]Container, error) {
 			ID:     ps.ID,
 			Status: status,
 			Image:  ps.Image,
+			Legacy: isLegacyContainer(ps.Labels),
 		}
 
 		// Check for sidecars
@@ -93,6 +97,10 @@ func ListContainers() ([]Container, error) {
 		return containers[i].Name < containers[j].Name
 	})
 	return containers, nil
+}
+
+func isLegacyContainer(labels string) bool {
+	return !strings.Contains(labels, "io.pomdock.profile=kali")
 }
 
 func isPentestContainer(name, image, labels string) bool {
@@ -156,6 +164,10 @@ func createOptionsFromLabels(name string) (ContainerCreateOptions, bool) {
 
 func createOptionsFromLabelMap(name string, labels map[string]string) (ContainerCreateOptions, bool) {
 	if labels["io.pomdock.role"] != "pentest" {
+		// The original default container predates Pomdock labels and was direct-routed.
+		if name == "pcm-pentest" {
+			return ContainerCreateOptions{Name: name}, true
+		}
 		return ContainerCreateOptions{}, false
 	}
 	route := labels["io.pomdock.route"]
@@ -200,6 +212,104 @@ func CreatePentestContainer(opts ContainerCreateOptions) error {
 	out, err := exec.Command("bash", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("create %s: %s", opts.Name, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func RunContainerTool(name, tool string) (string, error) {
+	var script string
+	switch tool {
+	case "identity":
+		script = `printf 'Hostname: '; hostname
+printf 'Addresses: '; hostname -I 2>/dev/null || true
+printf 'Public egress: '
+curl -fsS --max-time 10 https://ifconfig.me/ip || printf 'unavailable'
+printf '\n'`
+	case "ports":
+		script = `printf '%-8s %s\n' PROTOCOL PORT
+for entry in tcp:/proc/net/tcp tcp6:/proc/net/tcp6; do
+  protocol=${entry%%:*}; file=${entry#*:}
+  while read -r _ local _ state _; do
+    [ "$state" = "0A" ] || continue
+    port_hex=${local##*:}
+    printf '%-8s %d\n' "$protocol" "$((16#$port_hex))"
+  done < <(tail -n +2 "$file")
+done
+for entry in udp:/proc/net/udp udp6:/proc/net/udp6; do
+  protocol=${entry%%:*}; file=${entry#*:}
+  while read -r _ local _ state _; do
+    [ "$state" = "07" ] || continue
+    port_hex=${local##*:}
+    printf '%-8s %d\n' "$protocol" "$((16#$port_hex))"
+  done < <(tail -n +2 "$file")
+done`
+	case "tor":
+		script = `response=$(curl -fsS --max-time 12 https://check.torproject.org/api/ip) || exit $?
+if command -v jq >/dev/null 2>&1; then
+  printf '%s\n' "$response" | jq -r '"Tor: \(.IsTor)\nExit IP: \(.IP)"'
+else
+  printf '%s\n' "$response"
+fi`
+	default:
+		return "", fmt.Errorf("unknown engagement check %q", tool)
+	}
+	out, err := commandOutputWithTimeout(20*time.Second, "docker", "exec", name, "bash", "-lc", script)
+	output := strings.TrimSpace(string(out))
+	if tool == "identity" {
+		networks, networkErr := commandOutputWithTimeout(3*time.Second, "docker", "inspect", "-f",
+			`{{range $name, $net := .NetworkSettings.Networks}}{{printf "%s: %s via %s\n" $name $net.IPAddress $net.Gateway}}{{end}}`, name)
+		if networkErr == nil && strings.TrimSpace(string(networks)) != "" {
+			output += "\nDocker networks:\n" + strings.TrimSpace(string(networks))
+		}
+	}
+	if tool == "ports" {
+		published, portErr := commandOutputWithTimeout(3*time.Second, "docker", "port", name)
+		if portErr == nil && strings.TrimSpace(string(published)) != "" {
+			output += "\n\nPublished by Docker:\n" + strings.TrimSpace(string(published))
+		} else if portErr != nil {
+			output += "\n\nPublished by Docker: query unavailable"
+		} else {
+			output += "\n\nPublished by Docker: none"
+		}
+	}
+	if err != nil {
+		return output, fmt.Errorf("%s check: %w", tool, err)
+	}
+	return output, nil
+}
+
+func commandOutputWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, fmt.Errorf("%s timed out after %s", name, timeout)
+	}
+	return out, err
+}
+
+func CopyToContainer(name, hostSource, containerDestination string) error {
+	hostSource = expandHome(hostSource)
+	if _, err := os.Stat(hostSource); err != nil {
+		return fmt.Errorf("source %s: %w", hostSource, err)
+	}
+	out, err := exec.Command("docker", "cp", hostSource, name+":"+containerDestination).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker cp: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func CopyFromContainer(name, containerSource, hostDestination string) error {
+	hostDestination = expandHome(hostDestination)
+	if strings.HasSuffix(hostDestination, string(os.PathSeparator)) {
+		if err := os.MkdirAll(hostDestination, 0o750); err != nil {
+			return fmt.Errorf("create destination: %w", err)
+		}
+	}
+	out, err := exec.Command("docker", "cp", name+":"+containerSource, hostDestination).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker cp: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }

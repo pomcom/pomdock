@@ -3,19 +3,22 @@ package main
 import (
 	"fmt"
 	"hash/fnv"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ShellSession struct {
-	ID        string
-	Name      string
-	Container string
-	Active    bool
-	Index     int
+	ID     string
+	Name   string
+	Kind   string
+	Target string
+	Active bool
+	Index  int
 }
 
 var nonSessionChar = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -41,7 +44,7 @@ func ListShellSessions() ([]ShellSession, error) {
 		return nil, nil
 	}
 	out, err := exec.Command("tmux", "list-windows", "-t", "="+workspaceSession, "-F",
-		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_container}").CombinedOutput()
+		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_shell_kind}\t#{@pomdock_shell_target}\t#{@pomdock_container}").CombinedOutput()
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if tmuxServerAbsent(message) {
@@ -61,15 +64,23 @@ func tmuxServerAbsent(message string) bool {
 
 func parseShellSessions(output string) []ShellSession {
 	var sessions []ShellSession
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(output, "\r\n"), "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		fields := strings.Split(line, "\t")
-		if len(fields) != 5 || fields[4] == "" {
+		if len(fields) != 7 {
+			continue
+		}
+		kind, target := fields[4], fields[5]
+		if kind == "" && fields[6] != "" {
+			kind, target = "docker", fields[6]
+		}
+		if kind == "" || target == "" {
 			continue
 		}
 		index, _ := strconv.Atoi(fields[1])
 		sessions = append(sessions, ShellSession{
 			ID: fields[0], Index: index, Active: fields[2] == "1",
-			Name: fields[3], Container: fields[4],
+			Name: fields[3], Kind: kind, Target: target,
 		})
 	}
 	sort.Slice(sessions, func(i, j int) bool {
@@ -90,7 +101,7 @@ func EnsureContainerShell(container string) (string, error) {
 	}
 	if windows, err := ListShellSessions(); err == nil {
 		for _, window := range windows {
-			if window.Container == container {
+			if window.Kind == "docker" && window.Target == container {
 				return window.ID, nil
 			}
 		}
@@ -113,8 +124,74 @@ func EnsureContainerShell(container string) (string, error) {
 		_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
 		return "", fmt.Errorf("label shell window: %s", strings.TrimSpace(string(out)))
 	}
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_shell_kind", "docker").Run()
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_shell_target", container).Run()
 	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
 	return windowID, nil
+}
+
+func EnsureVMShell(vm VM) (string, error) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		return "", fmt.Errorf("tmux is required for persistent shells")
+	}
+	if exec.Command("tmux", "has-session", "-t", "="+workspaceSession).Run() != nil {
+		return "", fmt.Errorf("Pomdock tmux workspace is not running")
+	}
+	if windows, err := ListShellSessions(); err == nil {
+		for _, window := range windows {
+			if window.Kind == "vm" && window.Target == vm.Name {
+				return window.ID, nil
+			}
+		}
+	} else {
+		return "", err
+	}
+
+	profile := GuestProfileByID(vm.ProfileID)
+	if !profile.SupportsSSH {
+		return "", fmt.Errorf("%s profile does not provide SSH", profile.Label)
+	}
+	ip := vm.IP
+	if ip == "" {
+		var err error
+		ip, err = WaitForVMIP(vm.Name, 30*time.Second)
+		if err != nil {
+			return "", err
+		}
+	}
+	args := vmSSHArgs(profile, ip)
+	shellCommand := "exec " + shellJoin(append([]string{"ssh"}, args...))
+	out, err := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
+		"-t", workspaceSession+":", "-n", shellWindowName("ssh-"+vm.Name), shellCommand).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("create VM shell window: %s", strings.TrimSpace(string(out)))
+	}
+	windowID := strings.TrimSpace(string(out))
+	for key, value := range map[string]string{
+		"@pomdock_shell_kind":   "vm",
+		"@pomdock_shell_target": vm.Name,
+		"@pomdock_vm":           vm.Name,
+	} {
+		if out, err := exec.Command("tmux", "set-option", "-w", "-t", windowID, key, value).CombinedOutput(); err != nil {
+			_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
+			return "", fmt.Errorf("label VM shell window: %s", strings.TrimSpace(string(out)))
+		}
+	}
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
+	return windowID, nil
+}
+
+func vmSSHArgs(profile GuestProfile, ip string) []string {
+	args := []string{}
+	if keyPath := profileSSHKey(profile); keyPath != "" {
+		if _, err := os.Stat(keyPath); err == nil {
+			args = append(args, "-i", keyPath)
+		}
+	}
+	return append(args,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		profile.SSHUser+"@"+ip)
 }
 
 func SelectShellWindow(windowID string) error {
