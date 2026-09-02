@@ -16,7 +16,7 @@ fail() {
     exit 1
 }
 
-[[ "$PROFILE" == "windows-server-2025" || "$PROFILE" == "windows-11-enterprise" ]] \
+[[ "$PROFILE" == "windows-server-2025" || "$PROFILE" == "windows-server-2019" || "$PROFILE" == "windows-11-enterprise" ]] \
     || fail "unsupported Windows profile: ${PROFILE:-<empty>}"
 [[ "$VM_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid VM name"
 [[ -r "$WINDOWS_ISO" && -f "$WINDOWS_ISO" ]] || fail "Windows ISO is not readable: $WINDOWS_ISO"

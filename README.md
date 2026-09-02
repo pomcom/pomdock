@@ -81,6 +81,7 @@ pomdock vm create NAME --profile debian-stable
 pomdock vm create NAME --profile rocky-9
 pomdock vm create NAME --profile windows-11-enterprise --iso PATH
 pomdock vm create NAME --profile windows-server-2025 --iso PATH
+pomdock vm create NAME --profile windows-server-2019 --iso PATH
 pomdock vm list
 pomdock vm profile NAME [profile]
 pomdock vm start NAME

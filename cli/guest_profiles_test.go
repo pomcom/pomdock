@@ -38,7 +38,7 @@ func TestGuestProfilesExposeExpectedConnections(t *testing.T) {
 
 func TestProvisionableGuestProfilesHaveVerifiedImages(t *testing.T) {
 	profiles := ProvisionableGuestProfiles()
-	if len(profiles) != 6 || profiles[0].ID != "kali" {
+	if len(profiles) != 7 || profiles[0].ID != "kali" {
 		t.Fatalf("unexpected provisioning order: %#v", profiles)
 	}
 	for _, profile := range profiles[1:4] {
