@@ -603,7 +603,7 @@ func vmSSH() *cobra.Command {
 func vmRDP() *cobra.Command {
 	return &cobra.Command{
 		Use:               "rdp <name>",
-		Short:             "RDP into VM via xfreerdp3",
+		Short:             "RDP into VM via FreeRDP or Remmina fallback",
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeVMs,
 		RunE: func(_ *cobra.Command, args []string) error {

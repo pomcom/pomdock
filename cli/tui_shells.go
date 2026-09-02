@@ -14,9 +14,10 @@ type shellsMsg struct {
 }
 
 type shellReadyMsg struct {
-	container string
-	window    string
-	err       error
+	kind   string
+	target string
+	window string
+	err    error
 }
 
 func (m tuiModel) selectedShell() *ShellSession {
@@ -31,14 +32,16 @@ func (m *tuiModel) handleShellKey(key string) []tea.Cmd {
 	case "up", "k":
 		if m.shellCursor > 0 {
 			m.shellCursor--
+			return []tea.Cmd{tea.ClearScreen}
 		}
 	case "down", "j":
 		if m.shellCursor < len(m.shells)-1 {
 			m.shellCursor++
+			return []tea.Cmd{tea.ClearScreen}
 		}
 	case "c", "enter":
 		if shell := m.selectedShell(); shell != nil && !m.busy {
-			return []tea.Cmd{selectShellWindowCmd(shell.ID, shell.Container)}
+			return []tea.Cmd{selectShellWindowCmd(shell.ID, shell.Target)}
 		}
 	case "n":
 		if container := m.selectedContainer(); container != nil && !m.busy {
@@ -46,7 +49,7 @@ func (m *tuiModel) handleShellKey(key string) []tea.Cmd {
 			if container.Status != "running" {
 				return []tea.Cmd{
 					emit(logMsg{level: "info", text: fmt.Sprintf("Starting '%s'...", container.Name)}),
-					startContainerCmd(container.Name, false, true),
+					startContainerCmd(container.Name, true),
 				}
 			}
 			return []tea.Cmd{openPersistentShellCmd(container.Name)}
@@ -55,7 +58,7 @@ func (m *tuiModel) handleShellKey(key string) []tea.Cmd {
 		if shell := m.selectedShell(); shell != nil && !m.busy {
 			m.confirm = confirmDeleteShell
 			m.confirmName = shell.ID
-			m.confirmLabel = shell.Container
+			m.confirmLabel = shell.Target
 		}
 	}
 	return nil
@@ -63,16 +66,16 @@ func (m *tuiModel) handleShellKey(key string) []tea.Cmd {
 
 func (m tuiModel) shellsView() string {
 	width := m.width
-	nameWidth := width - 35
-	if nameWidth < 16 {
-		nameWidth = 16
+	nameWidth := width - 43
+	if nameWidth < 12 {
+		nameWidth = 12
 	}
-	header := "   " + padRight("CONTAINER", nameWidth) + "  " + padRight("STATE", 10) + "  WINDOW"
+	header := "   " + padRight("TARGET", nameWidth) + "  " + padRight("TYPE", 8) + "  " + padRight("STATE", 10) + "  WINDOW"
 	lines := []string{styleAccent.Render(header), styleMuted.Render(strings.Repeat("─", width))}
 	if len(m.shells) == 0 {
 		lines = append(lines,
 			styleMuted.Render("  No shell windows."),
-			styleMuted.Render("  Select a Docker container and press C, or press n here."),
+			styleMuted.Render("  Open a Docker shell with C or connect to a VM with c."),
 		)
 		return strings.Join(lines, "\n")
 	}
@@ -85,13 +88,14 @@ func (m tuiModel) shellsView() string {
 		if shell.Active {
 			state = styleWarn.Render(padRight("active", 10))
 		}
-		container := padRight(ansi.Truncate(shell.Container, nameWidth, "…"), nameWidth)
-		sessionWidth := width - nameWidth - 19
+		target := padRight(ansi.Truncate(shell.Target, nameWidth, "…"), nameWidth)
+		kind := padRight(shell.Kind, 8)
+		sessionWidth := width - nameWidth - 28
 		if sessionWidth < 8 {
 			sessionWidth = 8
 		}
 		session := ansi.Truncate(shell.Name, sessionWidth, "…")
-		lines = append(lines, fmt.Sprintf("%s● %s  %s  %s", cursor, container, state, session))
+		lines = append(lines, fmt.Sprintf("%s● %s  %s  %s  %s", cursor, target, kind, state, session))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -99,15 +103,22 @@ func (m tuiModel) shellsView() string {
 func openPersistentShellCmd(container string) tea.Cmd {
 	return func() tea.Msg {
 		window, err := EnsureContainerShell(container)
-		return shellReadyMsg{container: container, window: window, err: err}
+		return shellReadyMsg{kind: "docker", target: container, window: window, err: err}
 	}
 }
 
-func selectShellWindowCmd(window, container string) tea.Cmd {
+func openVMShellCmd(vm VM) tea.Cmd {
+	return func() tea.Msg {
+		window, err := EnsureVMShell(vm)
+		return shellReadyMsg{kind: "vm", target: vm.Name, window: window, err: err}
+	}
+}
+
+func selectShellWindowCmd(window, target string) tea.Cmd {
 	return func() tea.Msg {
 		if err := SelectShellWindow(window); err != nil {
-			return logMsg{level: "err", text: fmt.Sprintf("Could not open shell '%s': %v", container, err)}
+			return logMsg{level: "err", text: fmt.Sprintf("Could not open shell '%s': %v", target, err)}
 		}
-		return logMsg{level: "info", text: fmt.Sprintf("Switched to shell window '%s'", container)}
+		return logMsg{level: "info", text: fmt.Sprintf("Switched to shell window '%s'", target)}
 	}
 }

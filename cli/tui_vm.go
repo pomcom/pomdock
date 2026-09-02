@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -40,6 +43,13 @@ type vmCreatedMsg struct {
 	openConsole bool
 	warning     string
 	err         error
+}
+
+type vmProvisionStartedMsg struct {
+	name    string
+	window  string
+	profile GuestProfile
+	err     error
 }
 
 func newVMCreateForm() vmCreateForm {
@@ -223,24 +233,123 @@ func createVMCmd(opts vmCreateOptions) tea.Cmd {
 			return msg
 		}
 	}
+	return func() tea.Msg {
+		window, profile, err := startVMProvisionWindow(opts)
+		return vmProvisionStartedMsg{name: opts.name, window: window, profile: profile, err: err}
+	}
+}
+
+func startVMProvisionWindow(opts vmCreateOptions) (string, GuestProfile, error) {
 	cmd, profile, err := PrepareVMProvision(VMProvisionOptions{
 		ProfileID: opts.profileID,
 		Name:      opts.name,
 		ISO:       opts.iso,
 	})
 	if err != nil {
-		return func() tea.Msg { return vmCreatedMsg{name: opts.name, err: err} }
+		return "", GuestProfile{}, err
 	}
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		if err == nil {
-			msg := vmCreatedMsg{name: opts.name, openConsole: profile.Family == "windows"}
-			if metadataErr := SetVMProfileID(opts.name, profile.ID); metadataErr != nil {
-				msg.warning = "profile metadata could not be saved: " + metadataErr.Error()
-			}
-			return msg
+	executable, err := os.Executable()
+	if err != nil {
+		return "", GuestProfile{}, fmt.Errorf("resolve Pomdock executable: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+		executable = resolved
+	}
+	script := vmProvisionShellCommand(cmd, executable, opts.name, profile.ID)
+	windowName := vmProvisionWindowName(opts.name)
+	out, err := exec.Command("tmux", "new-window", "-P", "-F", "#{window_id}",
+		"-t", workspaceSession+":", "-n", windowName,
+		"exec bash -lc "+shellQuote(script)).CombinedOutput()
+	if err != nil {
+		return "", GuestProfile{}, fmt.Errorf("create provisioning window: %s", strings.TrimSpace(string(out)))
+	}
+	windowID := strings.TrimSpace(string(out))
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_job", "vm-provision").Run()
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_vm", opts.name).Run()
+	return windowID, profile, nil
+}
+
+func vmProvisionWindowName(name string) string {
+	return strings.TrimPrefix(shellWindowName("vm-setup-"+name), "shell-")
+}
+
+func startVMRDPWindow(name string, cmd *exec.Cmd) (string, error) {
+	if exec.Command("tmux", "has-session", "-t", "="+workspaceSession).Run() != nil {
+		return "", fmt.Errorf("Pomdock tmux workspace is not running")
+	}
+	script := vmRDPShellCommand(cmd, name)
+	windowName := strings.TrimPrefix(shellWindowName("rdp-"+name), "shell-")
+	out, err := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
+		"-t", workspaceSession+":", "-n", windowName,
+		"exec bash -lc "+shellQuote(script)).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("create RDP window: %s", strings.TrimSpace(string(out)))
+	}
+	windowID := strings.TrimSpace(string(out))
+	for key, value := range map[string]string{
+		"@pomdock_job": "rdp",
+		"@pomdock_vm":  name,
+	} {
+		if out, err := exec.Command("tmux", "set-option", "-w", "-t", windowID, key, value).CombinedOutput(); err != nil {
+			_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
+			return "", fmt.Errorf("label RDP window: %s", strings.TrimSpace(string(out)))
 		}
-		return vmCreatedMsg{name: opts.name, err: err}
-	})
+	}
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
+	if err := SelectShellWindow(windowID); err != nil {
+		_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
+		return "", err
+	}
+	return windowID, nil
+}
+
+func vmRDPShellCommand(cmd *exec.Cmd, name string) string {
+	dashboard := shellQuote(workspaceSession + ":" + dashboardWindow)
+	return fmt.Sprintf(`%s
+status=$?
+if [ "$status" -eq 0 ]; then
+  printf '\nRDP session for %s closed. Returning to the dashboard...\n'
+  sleep 1
+  tmux select-window -t %s 2>/dev/null || true
+  exit 0
+fi
+printf '\nFreeRDP for %s failed with status %%s. Returning to the dashboard in 8 seconds.\n' "$status"
+sleep 8
+tmux select-window -t %s 2>/dev/null || true
+exit "$status"
+`, shellJoin(cmd.Args), name, dashboard, name, dashboard)
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func vmProvisionShellCommand(cmd *exec.Cmd, executable, name, profileID string) string {
+	provision := shellJoin(cmd.Args)
+	setProfile := shellJoin([]string{executable, "vm", "profile", name, profileID})
+	dashboard := shellQuote(workspaceSession + ":" + dashboardWindow)
+	return fmt.Sprintf(`set +e
+%s
+status=$?
+if [ "$status" -eq 0 ]; then
+  %s
+  status=$?
+fi
+printf '\n'
+if [ "$status" -eq 0 ]; then
+  printf 'Pomdock VM %s is ready. Returning to the dashboard...\n'
+  sleep 3
+  tmux select-window -t %s 2>/dev/null || true
+  exit 0
+fi
+printf 'Pomdock VM setup failed with status %%s. This window remains open for diagnosis.\n' "$status"
+exec "${SHELL:-/bin/bash}" -l
+`, provision, setProfile, name, dashboard)
 }
 
 func (m tuiModel) vmCreateFormView() string {

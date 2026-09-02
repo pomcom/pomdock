@@ -20,6 +20,8 @@ RUN CGO_ENABLED=1 go install \
 
 FROM kalilinux/kali-rolling
 
+LABEL io.pomdock.atuin.variant="absolute-datetime"
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
