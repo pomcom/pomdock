@@ -1,14 +1,10 @@
 # pomdock
 
-Disposable, network-isolated Kali pentest environments from one command.
-
-pomdock spins up a Kali working environment as either a Docker container or a libvirt VM,
-and can force all of its traffic through a VPN kill-switch, through Tor, or through Tor
-over VPN. If a tool crashes or is misconfigured, it still cannot leak your real IP —
-the environment shares the tunnel's network namespace, so there is no path around it.
-Each engagement keeps its own loot directory, shell history, and recorded sessions.
-
-One Go binary drives everything, as a CLI or an interactive TUI.
+Disposable, network-isolated Kali pentest environments from one command. Run Kali as a
+Docker container or a libvirt VM, with all traffic forced through a VPN kill-switch, Tor,
+or Tor over VPN. The environment shares the tunnel's network namespace, so a crashed or
+misconfigured tool still cannot leak your real IP. Each engagement keeps its own loot
+directory, shell history, and recorded sessions. One Go binary, as a CLI or a TUI.
 
 ## Install
 
@@ -18,80 +14,41 @@ make install            # PREFIX sets the location
 make completion-zsh
 ```
 
-Requires Go (to build), Docker, and tmux. VMs additionally need qemu-kvm,
-libvirt-daemon-system, libvirt-clients, virt-viewer, libguestfs-tools, genisoimage, and
-curl; Windows guests also need swtpm and OVMF with Secure Boot. The shell backends run
-standalone without the binary.
+Needs Go (to build), Docker, and tmux. VMs also need libvirt and QEMU; the full package
+list is in [docs/vms.md](docs/vms.md). The shell backends run standalone without the binary.
 
-## Quick start
+## Use
 
 ```bash
 pomdock                                          # open the TUI
 pomdock docker exec --vpn ~/vpn/mullvad.conf     # Kali shell, all traffic via VPN
+pomdock docker exec --whonix --name acme         # Tor-routed, named engagement
 pomdock vm create kali                           # disposable Kali VM
 pomdock report                                   # browse recorded sessions
 ```
 
-## Docker
+Command surface:
 
 ```bash
-pomdock docker build
-pomdock docker exec [--vpn FILE] [--whonix] [--name NAME]
-pomdock docker status
-pomdock docker stop / rm / logs / burp [--name NAME]
-```
-
-`exec` is idempotent: it attaches if running, restarts if stopped, and builds and creates
-if absent. The flags choose how traffic leaves:
-
-| Flags | Path |
-|---|---|
-| none | Docker bridge |
-| `--vpn FILE` | Kali → gluetun → VPN |
-| `--whonix` | Kali → Tor |
-| `--whonix --vpn FILE` | Kali → Tor → VPN |
-
-`--vpn` takes an `.ovpn` or `.conf` from any provider. `--name` gives an engagement its
-own container, sidecars, loot dir at `~/pentest/NAME`, and history. The route is
-remembered: a stopped VPN/Tor engagement reconnects with just `exec --name NAME`.
-
-Full detail: [docs/docker.md](docs/docker.md).
-
-## VMs
-
-```bash
+pomdock docker exec [--vpn FILE] [--whonix] [--name NAME]    # attach, or build+create
+pomdock docker status | stop | rm | logs | burp [--name NAME]
 pomdock vm create [name] [--profile PROFILE] [--iso PATH]
-pomdock vm list
-pomdock vm start / stop / ssh / rdp / console / reset / clone / delete / ip NAME
+pomdock vm list | start | stop | ssh | rdp | console | reset | clone | delete NAME
+pomdock report [--name NAME]                                 # sessions + tracker UI
 ```
 
-`create` defaults to Kali. Other profiles: `ubuntu-lts`, `debian-stable`, `rocky-9`, and
-`windows-11-enterprise` / `windows-server-2019|2022|2025` (bring your own ISO). Every VM
-gets a `post-setup` snapshot you can return to with `reset`.
+`exec` is idempotent: it attaches if the container runs, restarts it if stopped, builds
+and creates it if absent. It records each engagement's route, so a stopped VPN or Tor
+engagement reconnects with just `exec --name NAME`. `--name` gives an engagement its own
+container, sidecars, loot dir at `~/pentest/NAME`, and history.
 
-Full detail, including Windows install and Whonix routing:
-[docs/vms.md](docs/vms.md).
+## Docs
 
-## Sessions
+- [Docker](docs/docker.md) — network modes, named engagements, dotfiles, tools, Burp
+- [VMs](docs/vms.md) — requirements, profiles, SSH keys, Windows, Whonix routing
+- [Sessions & reporting](docs/sessions.md) — recording, tagging, the report UI
+- [TUI](docs/tui.md) — tabs and keybindings
+- [Testing](docs/testing.md) — unit, build, and network-isolation tests
 
-Shells opened through pomdock are recorded automatically into the engagement's loot dir,
-and survive `docker rm`. Tag a long capture with `pomsession start <label>` inside the
-shell, then browse and export on the host:
-
-```bash
-pomdock report [--name NAME]
-```
-
-The report UI has a Tracker tab (Atuin history to team-report rows, copyable as TSV) and
-a searchable Sessions tab. It reads the loot dir read-only.
-
-Full detail: [docs/sessions.md](docs/sessions.md).
-
-## More
-
-- [TUI keybindings](docs/tui.md)
-- [Testing](docs/testing.md)
-- `pomdock --version`
-
-`pomdock docker ...` runs `pentest.sh`; `pomdock vm ...` runs the scripts in `kali-vm/`
-and `vm-profiles/`. `POMDOCK_ROOT` points an installed binary at a source checkout.
+`pomdock docker …` runs `pentest.sh`; `pomdock vm …` runs the scripts in `kali-vm/` and
+`vm-profiles/`. `POMDOCK_ROOT` points an installed binary at a source checkout.

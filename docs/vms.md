@@ -2,6 +2,13 @@
 
 Full reference for `pomdock vm`. For the short version see the [README](../README.md).
 
+## Requirements
+
+On top of the base install (Go, Docker, tmux), VMs need: `qemu-kvm`,
+`libvirt-daemon-system`, `libvirt-clients`, `virt-viewer`, `libguestfs-tools`,
+`genisoimage`, and `curl`. Windows guests additionally need `swtpm` and OVMF with Secure
+Boot.
+
 ```bash
 pomdock vm create [name]                          # Kali by default
 pomdock vm create NAME --profile ubuntu-lts
