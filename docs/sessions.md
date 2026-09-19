@@ -4,7 +4,7 @@ Every shell opened via `pomdock docker exec` (or a Shells-tab window) is recorde
 `script` into `~/pentest/<engagement>/sessions/`, on a host volume so recordings survive
 `docker rm`. Recording is armed by the `POMDOCK_ENGAGEMENT` variable the container's
 zshrc checks, so it never fires on the host or in a plain `docker exec`. A shell opened
-before the container picked up the hook is not recorded — open a fresh one.
+before the container picked up the hook is not recorded, so open a fresh one.
 
 ## Tagging sub-sessions
 
@@ -31,8 +31,8 @@ pomdock report import scrollback.txt --name acme    # import a pasted log
 
 The UI has two tabs:
 
-- **Tracker** — the engagement's Atuin history as team-report rows, copyable as TSV.
-- **Sessions** — recorded captures and imported logs, searchable across commands and
+- **Tracker**: the engagement's Atuin history as team-report rows, copyable as TSV.
+- **Sessions**: recorded captures and imported logs, searchable across commands and
   output.
 
 It reads the loot dir read-only and never touches the container image.

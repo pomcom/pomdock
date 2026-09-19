@@ -29,7 +29,7 @@ tears everything down.
 
 What each check confirms:
 
-- **Egress IP** via `am.i.mullvad.net/json` — the exit is the tunnel, not your ISP.
-- **DNS leak** via a TXT lookup — resolution goes through the tunnel.
-- **Tor** via `check.torproject.org` — `IsTor` is true where it should be. In the
+- **Egress IP** via `am.i.mullvad.net/json`, the exit is the tunnel, not your ISP.
+- **DNS leak** via a TXT lookup, resolution goes through the tunnel.
+- **Tor** via `check.torproject.org`, `IsTor` is true where it should be. In the
   Tor-over-VPN stack `IsTor` is false, because the site sees the VPN exit.

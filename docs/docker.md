@@ -51,9 +51,9 @@ build time and live-mounted at runtime, so edits take effect without a rebuild.
 
 ## Tools
 
-The installed tool set is defined by the arrays `PENTEST_APT`, `PENTEST_GO`,
-`PENTEST_BINS`, and `PENTEST_PIP` in `setup-pentest.sh`. Edit those, then run
-`pomdock docker build`. `setup-pentest.sh` also runs standalone on any Kali/Debian host.
+See [tools.md](tools.md) for what's installed. Edit the `PENTEST_*` arrays in
+`setup-pentest.sh` and run `pomdock docker build`. `setup-pentest.sh` also runs standalone
+on any Kali/Debian host.
 
 ## Burp Suite
 
@@ -63,7 +63,7 @@ the setup reminder. Wire it up in one of two directions depending on what you ne
 ### Container → Burp (intercept the container's traffic)
 
 Point the container's tools at Burp as their HTTP proxy. Burp must listen on an address
-the container can reach, so bind its listener to the **Docker bridge gateway** — not to
+the container can reach, so bind its listener to the **Docker bridge gateway**, not to
 "All interfaces", which would expose Burp to the whole LAN.
 
 1. Find the bridge gateway IP on the host (usually `172.17.0.1`):
