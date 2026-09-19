@@ -83,7 +83,11 @@ RUN chmod 0755 /home/$USERNAME/.atuin/bin/atuin
 COPY --from=jsluice-builder --chown=$USERNAME:$USERNAME /go/bin/jsluice /home/$USERNAME/go/bin/jsluice
 
 # ── Pentest tools — single source of truth: setup-pentest.sh ──────
-RUN bash /tmp/setup-pentest.sh
+# Keep only the built Go binaries; drop the Go build/module and pip caches
+# (several GB) that the tool builds leave behind in this layer.
+RUN bash /tmp/setup-pentest.sh \
+    && go clean -cache -modcache \
+    && rm -rf /home/$USERNAME/.cache/pip /home/$USERNAME/.cache/go-build
 
 # ── Shell setup (optional — runs setup-shell.sh if present in dotfiles) ──────
 RUN mkdir -p /home/$USERNAME/.atuin/bin \

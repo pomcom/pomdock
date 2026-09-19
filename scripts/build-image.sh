@@ -24,7 +24,7 @@ tar -C "${ROOT_DIR}" \
 tar -C "${DOTFILES_DIR}" \
     --exclude=.git \
     --exclude=docs-server/node_modules \
-    --exclude='tools/*.jar' \
+    --exclude='./tools' \
     --exclude='*.zip' \
     -cf - . \
     | tar -C "${BUILD_CONTEXT}/.pomdock-dotfiles" -xf -
