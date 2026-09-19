@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pomdock tracker</title>
+<style>
+  /* pomcom Palenight — dark default, light override */
+  :root{
+    --base:#000000;--mantle:#0b0f14;--crust:#05080b;--surface0:#161c22;--surface1:#202b31;
+    --surface2:#2b3640;--text:#d8dee9;--subtext:#8d99a6;--overlay:#6b7681;--faint:#4c566a;
+    --blue:#81a1c1;--cyan:#88c0d0;--green:#a3be8c;--peach:#d08770;--red:#bf616a;--yellow:#ebcb8b;
+    --mauve:#b48ead;--accent:#88c0d0;--int:#81a1c1;--ext:#d08770;--shadow:rgba(0,0,0,.6);
+    --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,Cantarell,"Noto Sans",sans-serif;
+    --mono:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  :root[data-theme="light"]{
+    --base:#ffffff;--mantle:#f4f6f9;--crust:#eef1f5;--surface0:#eceff4;--surface1:#dde3ec;
+    --surface2:#ccd4e0;--text:#2e3440;--subtext:#434c5e;--overlay:#5b6678;--faint:#aab3c2;
+    --blue:#4c7899;--cyan:#3d8299;--green:#5e8055;--peach:#bf6a4a;--red:#b23b48;--yellow:#9a7414;
+    --mauve:#8a5d86;--accent:#4c7899;--int:#4c7899;--ext:#bf6a4a;--shadow:rgba(60,70,90,.18);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--base);color:var(--text);font-family:var(--ui);
+    font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--accent);color:var(--base)}
+  .mono{font-family:var(--mono)}
+  header{position:sticky;top:0;z-index:6;background:var(--mantle);border-bottom:1px solid var(--surface1);
+    padding:0 18px;height:52px;display:flex;gap:12px;align-items:center}
+  h1{font-size:15px;margin:0;font-weight:650;display:flex;align-items:center;gap:8px;color:var(--text)}
+  h1 .dot{width:9px;height:9px;border-radius:50%;
+    background:conic-gradient(from 90deg,var(--blue),var(--cyan),var(--green),var(--blue))}
+  .seg{display:inline-flex;border:1px solid var(--surface1);border-radius:9px;overflow:hidden}
+  .seg a{padding:6px 13px;font-size:12px;color:var(--subtext);text-decoration:none;background:var(--base)}
+  .seg a+a{border-left:1px solid var(--surface1)}
+  .seg a:hover{color:var(--text);background:var(--surface0)}
+  .seg a.on{background:var(--accent);color:var(--base);font-weight:600}
+  .sep{color:var(--faint)}
+  label{color:var(--subtext);font-size:12px}
+  .pill{background:var(--surface0);border-radius:20px;padding:4px 13px;color:var(--subtext);font-size:12px}
+  .pill b{color:var(--green);font-variant-numeric:tabular-nums}
+  select,input,textarea,button{font-family:var(--ui);font-size:12px;color:var(--text);
+    background:var(--surface0);border:1px solid var(--surface1);border-radius:8px;padding:6px 10px;
+    transition:border-color .12s,background .12s}
+  select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+  button{cursor:pointer;font-weight:500}
+  button:hover{border-color:var(--accent);background:var(--surface1)}
+  button.accent{background:var(--accent);color:var(--base);border-color:var(--accent);font-weight:600}
+  button.accent:hover{filter:brightness(1.08)}
+  button.int{border-color:color-mix(in srgb,var(--int) 55%,var(--surface1))}
+  button.int:hover{background:var(--int);color:var(--base);border-color:var(--int)}
+  button.ext{border-color:color-mix(in srgb,var(--ext) 55%,var(--surface1))}
+  button.ext:hover{background:var(--ext);color:var(--base);border-color:var(--ext)}
+  button.danger:hover{background:var(--red);color:var(--base);border-color:var(--red)}
+  button.ghost{background:transparent;border-color:var(--surface1);color:var(--subtext)}
+  button.icon{padding:6px 9px;background:transparent;border-color:var(--surface1)}
+  button.sm{padding:4px 9px;font-size:11px;border-radius:7px}
+  .grow{flex:1}
+  .search{position:relative;display:flex;align-items:center}
+  .search svg{position:absolute;left:11px;width:14px;height:14px;fill:var(--overlay);pointer-events:none}
+  .search input{padding-left:32px;width:320px;background:var(--base);border-radius:9px}
+  .search .kbd{position:absolute;right:9px;color:var(--faint);font-size:10px;border:1px solid var(--surface1);border-radius:4px;padding:1px 5px}
+  .search .matches{position:absolute;right:9px;color:var(--overlay);font-size:11px}
+  .bar{display:flex;flex-wrap:wrap;gap:9px 12px;align-items:center;padding:10px 18px;
+    background:var(--mantle);border-bottom:1px solid var(--surface1)}
+  .bar.tools{position:sticky;top:52px;z-index:5}
+  .bar.bulk{position:sticky;top:105px;z-index:5;background:var(--crust);padding:9px 18px}
+  .group{display:flex;gap:6px;align-items:center;background:var(--base);border:1px solid var(--surface1);
+    border-radius:11px;padding:5px 9px}
+  .group>label:first-child{color:var(--overlay);font-size:10px;text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-right:3px}
+  .chk-count{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}
+  .delchip{color:var(--overlay);font-size:11px}
+  .delchip a{color:var(--accent);cursor:pointer;text-decoration:underline}
+  table{border-collapse:separate;border-spacing:0;width:100%}
+  thead th{position:sticky;top:157px;background:var(--mantle);z-index:4;text-align:left;padding:9px 10px;
+    font-size:11px;color:var(--overlay);font-weight:600;white-space:nowrap;letter-spacing:.3px;
+    text-transform:uppercase;border-bottom:1px solid var(--surface1)}
+  tbody td{border-bottom:1px solid var(--surface0);padding:0 10px;height:40px;vertical-align:middle}
+  tbody tr.row:hover{background:var(--mantle)}
+  tr.noise{opacity:.42}
+  tr.incl{background:color-mix(in srgb,var(--accent) 11%,transparent)}
+  tr.incl:hover{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+  tr.incl td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+  td.num{color:var(--accent);text-align:right;width:28px;font-weight:700;font-variant-numeric:tabular-nums}
+  td.ro{color:var(--overlay);white-space:nowrap;width:112px;font-size:12px;cursor:pointer;user-select:none;font-family:var(--mono)}
+  td.measure{max-width:0;width:42%}
+  .mcell{display:flex;align-items:center;gap:6px}
+  .mtext{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);
+    font-size:12.5px;cursor:text;padding:4px 2px;border-radius:6px}
+  .mtext:hover{background:var(--surface0)}
+  .mtext.edited{color:var(--cyan)}
+  .chev,.xrow{color:var(--overlay);cursor:pointer;flex:none;width:20px;height:20px;display:flex;
+    align-items:center;justify-content:center;border-radius:6px;font-size:11px;opacity:0}
+  tr.row:hover .chev,tr.row:hover .xrow{opacity:1}
+  .chev.open{transform:rotate(90deg);color:var(--accent);opacity:1}
+  .chev:hover{background:var(--surface1);color:var(--text)}
+  .xrow:hover{background:var(--red);color:var(--base)}
+  td.act{width:34px;text-align:center}
+  .delx{background:transparent;border:1px solid transparent;color:var(--faint);font-size:12px;
+    padding:3px 7px;border-radius:7px;opacity:.5}
+  tr.row:hover .delx{opacity:1;color:var(--overlay)}
+  .delx:hover{background:var(--red);color:var(--base);border-color:var(--red)}
+  /* toggleable edit bar */
+  body.bulk-hidden .bar.bulk{display:none}
+  body.bulk-hidden thead th{top:105px}
+  tr.detail td{background:var(--crust);padding:12px 14px 14px 44px;border-bottom:1px solid var(--surface1)}
+  .detail-grid{display:grid;grid-template-columns:1fr;gap:10px;max-width:1100px}
+  .field label{display:block;color:var(--overlay);font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600}
+  .rawcmd{font-family:var(--mono);font-size:12.5px;background:var(--base);border:1px solid var(--surface1);
+    border-radius:8px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;color:var(--text);
+    display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .rawcmd button{flex:none}
+  .drow{display:flex;gap:8px;margin-top:4px}
+  textarea.big{width:100%;font-family:var(--mono);font-size:12.5px;background:var(--base);border-radius:8px;min-height:56px;resize:vertical;line-height:1.5}
+  .badge{font-size:10px;border-radius:20px;padding:1px 8px;font-weight:600;font-family:var(--mono)}
+  .exit-ok{background:color-mix(in srgb,var(--green) 20%,transparent);color:var(--green)}
+  .exit-bad{background:color-mix(in srgb,var(--red) 22%,transparent);color:var(--red)}
+  input.cell,select.cell{width:100%;background:transparent;border:1px solid transparent;border-radius:7px;padding:5px 6px;color:var(--text)}
+  input.cell{font-family:var(--mono);font-size:12px}
+  input.cell:hover,select.cell:hover{border-color:var(--surface1);background:var(--surface0)}
+  /* fixed dropdown: kill the native arrow that overlapped the text */
+  select.cell{appearance:none;-webkit-appearance:none;-moz-appearance:none;padding-right:8px;cursor:pointer}
+  select.cell[data-v="Internal"]{color:var(--int);font-weight:600}
+  select.cell[data-v="External"]{color:var(--ext);font-weight:600}
+  td.eint{min-width:96px}
+  td.targets{min-width:150px;max-width:220px}
+  td.targets input{font-size:11.5px}
+  td.editcol{min-width:82px}
+  td.comment{min-width:160px;max-width:240px}
+  td.comment input{font-size:11.5px}
+  .chk{width:34px;text-align:center}
+  input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
+  .empty{color:var(--overlay);padding:36px 18px;text-align:center}
+  .hl{background:color-mix(in srgb,var(--yellow) 40%,transparent);color:var(--text);border-radius:3px}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--accent);
+    color:var(--base);padding:10px 20px;border-radius:11px;font-weight:600;opacity:0;transition:.2s;
+    pointer-events:none;z-index:9;box-shadow:0 10px 30px var(--shadow);display:flex;gap:12px;align-items:center}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+  .toast a{color:var(--base);text-decoration:underline;cursor:pointer;font-weight:700}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:20;display:flex;align-items:center;justify-content:center}
+  .modal .box{background:var(--mantle);border:1px solid var(--surface1);border-radius:14px;padding:18px;
+    width:min(520px,92vw);max-height:80vh;overflow:auto;box-shadow:0 20px 60px var(--shadow)}
+  .modal h2{margin:0 0 4px;font-size:15px}
+  .modal p{color:var(--subtext);margin:0 0 12px;font-size:12px}
+  .rule{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--surface0)}
+  .rule .pat{flex:1;font-family:var(--mono);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot"></span>pomdock</h1>
+  <div class="seg"><a class="on" href="/">Tracker</a><a href="/sessions">Sessions</a></div>
+  <span class="sep">·</span>
+  <label>Engagement</label>
+  <select id="eng"></select>
+  <span class="grow"></span>
+  <button class="icon" id="themeBtn" title="toggle light / dark">☾</button>
+  <span class="pill">included <b id="inclcount">0</b></span>
+</header>
+
+<div class="bar tools">
+  <div class="search">
+    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+    <input id="filter" placeholder="Search command, measure, target…">
+    <span class="kbd" id="searchhint">/</span>
+    <span class="matches" id="matches" hidden></span>
+  </div>
+  <label><input type="checkbox" id="shownoise"> show noise (<span id="noisecount">0</span>)</label>
+  <button class="sm ghost" id="colsBtn">Columns</button>
+  <button class="sm ghost" id="noiseBtn">Noise rules</button>
+  <button class="sm ghost" id="bulkToggle">Hide edit bar</button>
+  <span class="delchip" id="delchip" hidden></span>
+  <span class="grow"></span>
+  <label title="prepend team column headers"><input type="checkbox" id="withHeader"> header row</label>
+  <button id="copyBtn" class="accent">Copy TSV</button>
+  <button id="dlBtn" class="ghost">Download .tsv</button>
+</div>
+
+<div class="bar bulk">
+  <span>Bulk edit <span class="chk-count" id="chkcount">0</span> checked</span>
+  <div class="group">
+    <label>Ext/Int</label>
+    <button class="int sm" data-bulk-ie="Internal">Internal</button>
+    <button class="ext sm" data-bulk-ie="External">External</button>
+    <button class="ghost sm" data-bulk-ie="">clear</button>
+  </div>
+  <div class="group">
+    <label>Source</label>
+    <input id="bulkSource" placeholder="192.0.2.5" size="15">
+    <button id="bulkSourceBtn" class="sm">set</button>
+  </div>
+  <div class="group" id="grpTester">
+    <label>Tester</label>
+    <input id="bulkTester" placeholder="LS" size="5">
+    <button id="bulkTesterBtn" class="sm">set</button>
+  </div>
+  <div class="group" id="grpMitre">
+    <label>MITRE</label>
+    <input id="bulkMitre" placeholder="T1552.001" size="10">
+    <button id="bulkMitreBtn" class="sm">set</button>
+  </div>
+  <div class="group">
+    <label>Outcome</label>
+    <button class="sm" data-bulk-outcome="Successful">Successful</button>
+    <button class="sm" data-bulk-outcome="Failed">Failed</button>
+  </div>
+  <span class="grow"></span>
+  <button id="noiseCheckedBtn" class="ghost sm" title="add checked commands as noise rules">Mark noise</button>
+  <button id="delCheckedBtn" class="danger sm">Delete checked</button>
+  <button id="mergeBtn">Merge checked</button>
+</div>
+
+<div id="body"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+// Full column catalogue; opt columns (Tester, MITRE TTP) are toggleable so the
+// export matches whichever team-sheet variant you're filling. Order is fixed.
+const ALLCOLS=[
+  {key:"num",     h:"Number",                                 sh:"#"},
+  {key:"started", h:"Started (CEST)",                         sh:"Started"},
+  {key:"ended",   h:"Ended (CEST)",                           sh:"Ended"},
+  {key:"measure", h:"Measure",                                sh:"Measure"},
+  {key:"ie",      h:"External / Internal",                    sh:"Ext/Int"},
+  {key:"targets", h:"Affected hosts / targets",               sh:"Targets"},
+  {key:"source",  h:"Source (if via network)",                sh:"Source"},
+  {key:"tester",  h:"Tester",                                 sh:"Tester", opt:true},
+  {key:"mitre",   h:"MITRE TTP",                              sh:"MITRE",  opt:true},
+  {key:"outcome", h:"Outcome",                                sh:"Outcome"},
+  {key:"comment", h:"Optional measure description / comment", sh:"Comment"},
+];
+let hiddenCols=new Set(["mitre"]); // default: Tester on, MITRE off
+function activeCols(){return ALLCOLS.filter(c=>!c.opt||!hiddenCols.has(c.key));}
+function cellValue(it,key,i){return key==="num"?String(i+1):(it[key]||"");}
+const $=s=>document.querySelector(s);
+let items=[], defaultTester="LS", visibleOrder=[], lastClicked=-1, deleted=[], noiseRules=[];
+const store={get:k=>{try{return localStorage.getItem("pomdock."+k)||"";}catch(e){return"";}},
+  set:(k,v)=>{try{localStorage.setItem("pomdock."+k,v);}catch(e){}}};
+try{const h=store.get("hiddenCols");if(h)hiddenCols=new Set(JSON.parse(h));}catch(e){}
+function saveCols(){store.set("hiddenCols",JSON.stringify([...hiddenCols]));}
+
+// ---- theme ----
+function applyTheme(t){document.documentElement.dataset.theme=t;
+  $("#themeBtn").textContent=t==="light"?"☀":"☾";store.set("theme",t);}
+applyTheme(store.get("theme")||"dark");
+$("#themeBtn").onclick=()=>applyTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
+
+// ---- noise rules ----
+try{noiseRules=JSON.parse(store.get("noiseRules")||"[]");}catch(e){noiseRules=[];}
+function saveNoise(){store.set("noiseRules",JSON.stringify(noiseRules));}
+function matchesRule(cmd){
+  const c=(cmd||"").toLowerCase();
+  return noiseRules.some(r=>{
+    if(!r)return false;
+    if(r.length>2&&r[0]==="/"&&r.endsWith("/")){try{return new RegExp(r.slice(1,-1),"i").test(cmd);}catch(e){return false;}}
+    return c.includes(r.toLowerCase());
+  });
+}
+function effNoise(it){return it.noise||matchesRule(it.command);}
+
+function toast(m,undo){const t=$("#toast");t.innerHTML="";t.append(document.createTextNode(m));
+  if(undo){const a=document.createElement("a");a.textContent="undo";a.onclick=()=>{undo();t.classList.remove("show");};t.append(a);}
+  t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),undo?4000:1500);}
+
+async function loadEngagements(){
+  const d=await(await fetch("/api/engagements")).json();
+  defaultTester=d.tester||"LS";
+  if(!$("#bulkTester").value)$("#bulkTester").value=store.get("tester")||defaultTester;
+  if(!$("#bulkSource").value)$("#bulkSource").value=store.get("source");
+  const sel=$("#eng");sel.innerHTML="";
+  (d.engagements||[]).forEach(e=>{const o=document.createElement("option");o.value=e.name;o.textContent=`${e.name} · ${e.rows}`;sel.appendChild(o);});
+  if(d.default&&[...sel.options].some(o=>o.value===d.default))sel.value=d.default;
+  if(sel.value)loadRows(sel.value);
+}
+async function loadRows(name){
+  $("#body").innerHTML='<div class="empty">loading…</div>';
+  const d=await(await fetch("/api/rows?name="+encodeURIComponent(name))).json();
+  if(d.error){$("#body").innerHTML=`<div class="empty">error: ${d.error}</div>`;return;}
+  const src=$("#bulkSource").value;
+  items=(d.rows||[]).map(r=>({kind:"row",ids:[r.id],ts:r.ts,endTs:r.endTs,started:r.started,ended:r.ended,
+    measure:r.measure,origMeasure:r.measure,command:r.command,targets:r.targets,exit:r.exit,noise:r.noise,
+    incl:false,ie:"",source:src,tester:defaultTester,mitre:"",outcome:"",comment:r.command,expanded:false}));
+  lastClicked=-1;deleted=[];updateDelChip();render();
+}
+function visible(){
+  const q=$("#filter").value.toLowerCase().trim(),showNoise=$("#shownoise").checked;
+  return items.filter(it=>{
+    if(effNoise(it)&&!it.incl&&!showNoise)return false;
+    if(q&&!(it.command+" "+it.measure+" "+it.targets).toLowerCase().includes(q))return false;
+    return true;
+  }).sort((a,b)=>a.ts-b.ts);
+}
+function hl(t,q){if(!q)return esc(t);const i=t.toLowerCase().indexOf(q);if(i<0)return esc(t);
+  return esc(t.slice(0,i))+'<span class="hl">'+esc(t.slice(i,i+q.length))+'</span>'+esc(t.slice(i+q.length));}
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function render(){
+  const q=$("#filter").value.toLowerCase().trim();
+  const rows=visible();visibleOrder=rows;
+  let n=0;const num=new Map();
+  items.slice().sort((a,b)=>a.ts-b.ts).forEach(it=>{if(it.incl){n++;num.set(it,n);}});
+  $("#inclcount").textContent=n;$("#chkcount").textContent=items.filter(it=>it.incl).length;
+  $("#noisecount").textContent=items.filter(it=>effNoise(it)).length;
+  const mEl=$("#matches");
+  if(q){mEl.hidden=false;mEl.textContent=`${rows.length} match`;$("#searchhint").hidden=true;}
+  else{mEl.hidden=true;$("#searchhint").hidden=false;}
+  if(rows.length===0){$("#body").innerHTML='<div class="empty">no rows match — clear the search or enable “show noise”.</div>';return;}
+
+  const tbl=document.createElement("table");
+  const allChk=rows.every(it=>it.incl);
+  const cols=activeCols();
+  const thead=document.createElement("thead");
+  thead.innerHTML=`<tr><th class="chk"><input type="checkbox" id="selall" ${allChk?"checked":""} title="select all visible"></th>`
+    +cols.map(c=>`<th>${c.sh}</th>`).join("")+`<th></th></tr>`;
+  tbl.appendChild(thead);
+  const tb=document.createElement("tbody");const toGrow=[];
+  rows.forEach((it,idx)=>{
+    const tr=document.createElement("tr");tr.className="row";
+    if(effNoise(it))tr.classList.add("noise");if(it.incl)tr.classList.add("incl");
+    const chk=document.createElement("td");chk.className="chk";
+    const cb=document.createElement("input");cb.type="checkbox";cb.checked=it.incl;cb.onclick=e=>toggleRow(idx,e.shiftKey);
+    chk.appendChild(cb);tr.appendChild(chk);
+    cols.forEach(c=>{
+      if(c.key==="num"){const nc=td("num",it.incl?String(num.get(it)):"");nc.onclick=()=>toggleRow(idx,false);tr.appendChild(nc);}
+      else if(c.key==="started"||c.key==="ended"){const rc=td("ro",it[c.key]);rc.onclick=()=>toggleRow(idx,false);tr.appendChild(rc);}
+      else if(c.key==="measure"){
+        const m=document.createElement("td");m.className="measure";
+        const wrap=document.createElement("div");wrap.className="mcell";
+        const chev=document.createElement("span");chev.className="chev"+(it.expanded?" open":"");chev.textContent="▶";
+        chev.title="show full command";chev.onclick=()=>{it.expanded=!it.expanded;render();};
+        const txt=document.createElement("div");txt.className="mtext"+(it.measure!==it.origMeasure?" edited":"");
+        txt.innerHTML=hl(it.measure,q);txt.title="click to expand / edit";txt.onclick=()=>{it.expanded=true;render();};
+        wrap.appendChild(chev);wrap.appendChild(txt);m.appendChild(wrap);tr.appendChild(m);
+      }
+      else if(c.key==="ie"){tr.appendChild(sel(it,"ie",["","Internal","External"],"eint"));}
+      else if(c.key==="comment"){tr.appendChild(inputCell(it,"comment","comment"));}
+      else if(c.key==="targets"){tr.appendChild(inputCell(it,"targets","targets"));}
+      else{tr.appendChild(inputCell(it,c.key,"editcol"));}
+    });
+    const act=document.createElement("td");act.className="act";
+    const del=document.createElement("button");del.className="delx";del.textContent="✕";del.title="delete row (atuin untouched)";
+    del.onclick=()=>deleteItems([it]);act.appendChild(del);tr.appendChild(act);
+    tb.appendChild(tr);
+    if(it.expanded){
+      const dtr=document.createElement("tr");dtr.className="detail";const dtd=document.createElement("td");dtd.colSpan=cols.length+2;
+      const grid=document.createElement("div");grid.className="detail-grid";
+      const f1=document.createElement("div");f1.className="field";
+      const ex=it.exit===0?'<span class="badge exit-ok">exit 0</span>':`<span class="badge exit-bad">exit ${it.exit}</span>`;
+      f1.innerHTML=`<label>Full command &nbsp;${ex}</label>`;
+      const raw=document.createElement("div");raw.className="rawcmd";
+      const rawtxt=document.createElement("span");rawtxt.innerHTML=hl(it.command,q);
+      const cp=document.createElement("button");cp.className="sm ghost";cp.textContent="copy";
+      cp.onclick=()=>navigator.clipboard.writeText(it.command).then(()=>toast("command copied"));
+      raw.appendChild(rawtxt);raw.appendChild(cp);f1.appendChild(raw);
+      const drow=document.createElement("div");drow.className="drow";
+      const dn=document.createElement("button");dn.className="sm ghost";dn.textContent="＋ always noise";
+      dn.title="add this command as a noise rule";dn.onclick=()=>addNoiseRuleFrom(it.command);
+      const del=document.createElement("button");del.className="sm danger";del.textContent="✕ delete row";
+      del.onclick=()=>deleteItems([it]);
+      drow.appendChild(dn);drow.appendChild(del);f1.appendChild(drow);grid.appendChild(f1);
+      const f2=document.createElement("div");f2.className="field";f2.innerHTML="<label>Measure (short summary for the report)</label>";
+      const ta=document.createElement("textarea");ta.className="big mono";ta.value=it.measure;ta.oninput=()=>{it.measure=ta.value;};
+      f2.appendChild(ta);grid.appendChild(f2);
+      const f3=document.createElement("div");f3.className="field";f3.innerHTML="<label>Optional description / comment (defaults to the full command)</label>";
+      const tc=document.createElement("textarea");tc.className="big mono";tc.value=it.comment;tc.oninput=()=>{it.comment=tc.value;};
+      f3.appendChild(tc);grid.appendChild(f3);
+      dtd.appendChild(grid);dtr.appendChild(dtd);tb.appendChild(dtr);toGrow.push(ta);toGrow.push(tc);
+    }
+  });
+  tbl.appendChild(tb);$("#body").innerHTML="";$("#body").appendChild(tbl);
+  $("#selall").onchange=e=>{rows.forEach(it=>it.incl=e.target.checked);render();};
+  toGrow.forEach(ta=>{ta.style.height="auto";ta.style.height=Math.max(56,ta.scrollHeight)+"px";});
+}
+function toggleRow(idx,shift){const it=visibleOrder[idx];if(!it)return;const target=!it.incl;
+  if(shift&&lastClicked>=0){const[a,b]=[Math.min(lastClicked,idx),Math.max(lastClicked,idx)];
+    for(let i=a;i<=b;i++)visibleOrder[i].incl=target;}else{it.incl=target;}lastClicked=idx;render();}
+function td(cls,t){const d=document.createElement("td");d.className=cls;d.textContent=t;return d;}
+function inputCell(it,key,cls){const d=document.createElement("td");d.className=cls;
+  const i=document.createElement("input");i.className="cell";i.value=it[key]||"";i.oninput=()=>{it[key]=i.value;};d.appendChild(i);return d;}
+function sel(it,key,opts,cls){const d=document.createElement("td");d.className=cls||"editcol";
+  const s=document.createElement("select");s.className="cell";
+  opts.forEach(o=>{const op=document.createElement("option");op.value=o;op.textContent=o||"—";s.appendChild(op);});
+  s.value=it[key]||"";s.dataset.v=it[key]||"";s.onchange=()=>{it[key]=s.value;s.dataset.v=s.value;};d.appendChild(s);return d;}
+
+// ---- delete (atuin-safe, client-only) ----
+function deleteItems(list){
+  if(list.length===0){toast("nothing checked");return;}
+  const set=new Set(list);const removed=items.filter(it=>set.has(it));
+  items=items.filter(it=>!set.has(it));deleted.push(removed);updateDelChip();render();
+  toast(`removed ${removed.length} row${removed.length>1?"s":""} (atuin untouched)`,()=>{items=items.concat(removed);deleted.pop();updateDelChip();render();});
+}
+function updateDelChip(){const c=$("#delchip");const n=deleted.reduce((a,g)=>a+g.length,0);
+  if(n===0){c.hidden=true;return;}c.hidden=false;c.innerHTML=`${n} removed · <a id="undoAll">restore all</a>`;
+  $("#undoAll").onclick=()=>{deleted.flat().forEach(it=>items.push(it));deleted=[];updateDelChip();render();toast("restored");};}
+
+// ---- noise rule editor ----
+function addNoiseRuleFrom(cmd){
+  const guess=(cmd||"").trim().split(/\s+/).slice(0,2).join(" ")||cmd;
+  const pat=prompt("Noise rule — commands containing this are always noise.\nUse /regex/ for a pattern.",guess);
+  if(pat===null)return;const p=pat.trim();if(!p)return;
+  if(!noiseRules.includes(p)){noiseRules.push(p);saveNoise();}
+  render();toast(`noise rule added: ${p}`);
+}
+function openNoiseModal(){
+  const m=document.createElement("div");m.className="modal";
+  m.innerHTML=`<div class="box"><h2>Noise rules</h2>
+    <p>Rows whose command matches a rule are treated as noise (hidden unless “show noise”).
+    Plain text = substring match; wrap in /…/ for a regex.</p>
+    <div id="rulelist"></div>
+    <div class="rule"><input id="newrule" class="pat" placeholder="e.g. ifconfig.me  or  /^bcurl/"><button id="addrule" class="sm accent">add</button></div>
+    <div style="margin-top:14px;text-align:right"><button id="closeNoise" class="sm">done</button></div></div>`;
+  document.body.appendChild(m);
+  const list=m.querySelector("#rulelist");
+  const draw=()=>{list.innerHTML="";noiseRules.forEach((r,i)=>{const row=document.createElement("div");row.className="rule";
+    row.innerHTML=`<span class="pat">${esc(r)}</span>`;const b=document.createElement("button");b.className="sm ghost";b.textContent="remove";
+    b.onclick=()=>{noiseRules.splice(i,1);saveNoise();draw();render();};row.appendChild(b);list.appendChild(row);});
+    if(noiseRules.length===0)list.innerHTML='<p style="margin:0">No custom rules yet.</p>';};
+  draw();
+  const add=()=>{const v=m.querySelector("#newrule").value.trim();if(v&&!noiseRules.includes(v)){noiseRules.push(v);saveNoise();draw();render();}m.querySelector("#newrule").value="";};
+  m.querySelector("#addrule").onclick=add;
+  m.querySelector("#newrule").onkeydown=e=>{if(e.key==="Enter")add();};
+  m.querySelector("#closeNoise").onclick=()=>m.remove();
+  m.onclick=e=>{if(e.target===m)m.remove();};
+}
+
+function bulkSet(field,value){const chk=items.filter(it=>it.incl);if(chk.length===0){toast("check some rows first");return;}
+  chk.forEach(it=>it[field]=value);if(field==="source")store.set("source",value);if(field==="tester")store.set("tester",value);
+  render();toast(`${chk.length} rows → ${field}${value?": "+value:" cleared"}`);}
+function exportRows(){const cols=activeCols();return items.filter(it=>it.incl).sort((a,b)=>a.ts-b.ts).map((it,i)=>cols.map(c=>cellValue(it,c.key,i)));}
+function toTSV(){const rows=exportRows();const lines=rows.map(r=>r.map(c=>(c||"").replace(/\t/g," ").replace(/\r?\n/g," ")).join("\t"));
+  if($("#withHeader").checked)lines.unshift(activeCols().map(c=>c.h).join("\t"));return lines.join("\n");}
+async function copyTSV(){const tsv=toTSV();if(!tsv){toast("nothing checked");return;}
+  try{await navigator.clipboard.writeText(tsv);}catch(e){const t=document.createElement("textarea");t.value=tsv;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();}
+  toast(`copied ${exportRows().length} rows — paste into Excel`);}
+function download(){const tsv=toTSV();if(!tsv){toast("nothing checked");return;}
+  const b=new Blob([tsv],{type:"text/tab-separated-values"});const a=document.createElement("a");
+  a.href=URL.createObjectURL(b);a.download=`${$("#eng").value||"report"}-report.tsv`;a.click();URL.revokeObjectURL(a.href);}
+function mergeChecked(){const chk=items.filter(it=>it.incl);if(chk.length<2){toast("check 2+ rows to merge");return;}
+  chk.sort((a,b)=>a.ts-b.ts);const first=chk[0],seen=new Set(),targets=[];
+  chk.forEach(it=>String(it.targets||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(t=>{if(!seen.has(t.toLowerCase())){seen.add(t.toLowerCase());targets.push(t);}}));
+  const measure=chk.map(it=>it.measure).filter(Boolean).join("; ");
+  const merged={kind:"merged",ids:chk.flatMap(it=>it.ids),ts:chk[0].ts,endTs:Math.max(...chk.map(it=>it.endTs)),
+    started:chk[0].started,ended:chk[chk.length-1].ended,measure,origMeasure:measure,command:chk.map(it=>it.command).join("  |  "),
+    targets:targets.join(", "),exit:0,noise:false,incl:true,ie:chk.map(it=>it.ie).find(Boolean)||"",
+    source:chk.map(it=>it.source).find(Boolean)||first.source||"",mitre:chk.map(it=>it.mitre).find(Boolean)||"",
+    tester:chk.map(it=>it.tester).find(Boolean)||defaultTester,outcome:chk.map(it=>it.outcome).find(Boolean)||"",
+    comment:chk.map(it=>it.comment).filter(Boolean).join("\n\n"),expanded:false};
+  items=items.filter(it=>!chk.includes(it));items.push(merged);lastClicked=-1;render();toast(`merged ${chk.length} rows`);}
+
+$("#eng").onchange=e=>loadRows(e.target.value);
+$("#filter").oninput=render;$("#shownoise").onchange=render;
+$("#copyBtn").onclick=copyTSV;$("#dlBtn").onclick=download;$("#mergeBtn").onclick=mergeChecked;
+$("#noiseBtn").onclick=openNoiseModal;
+function setBulk(hidden){document.body.classList.toggle("bulk-hidden",hidden);
+  $("#bulkToggle").textContent=hidden?"Show edit bar":"Hide edit bar";store.set("bulkHidden",hidden?"1":"");}
+setBulk(store.get("bulkHidden")==="1");
+$("#bulkToggle").onclick=()=>setBulk(!document.body.classList.contains("bulk-hidden"));
+$("#delCheckedBtn").onclick=()=>deleteItems(items.filter(it=>it.incl));
+$("#noiseCheckedBtn").onclick=()=>{const chk=items.filter(it=>it.incl);if(chk.length===0){toast("check some rows first");return;}
+  chk.forEach(it=>{const p=(it.command||"").trim().split(/\s+/).slice(0,2).join(" ");if(p&&!noiseRules.includes(p))noiseRules.push(p);});saveNoise();render();toast(`added ${chk.length} noise rules`);};
+document.querySelectorAll("[data-bulk-ie]").forEach(b=>b.onclick=()=>bulkSet("ie",b.dataset.bulkIe));
+document.querySelectorAll("[data-bulk-outcome]").forEach(b=>b.onclick=()=>bulkSet("outcome",b.dataset.bulkOutcome));
+$("#bulkSourceBtn").onclick=()=>bulkSet("source",$("#bulkSource").value);
+$("#bulkTesterBtn").onclick=()=>bulkSet("tester",$("#bulkTester").value||defaultTester);
+$("#bulkMitreBtn").onclick=()=>bulkSet("mitre",$("#bulkMitre").value);
+// keep the bulk controls in sync with which optional columns are shown
+function syncCols(){$("#grpTester").hidden=hiddenCols.has("tester");$("#grpMitre").hidden=hiddenCols.has("mitre");}
+function openColsModal(){
+  const opts=ALLCOLS.filter(c=>c.opt);
+  const m=document.createElement("div");m.className="modal";
+  m.innerHTML=`<div class="box"><h2>Columns</h2>
+    <p>Pick the columns for this engagement's sheet. Your choice is remembered and drives the grid and the exported TSV.</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="sm accent" id="presetTester">Tester sheet</button>
+      <button class="sm accent" id="presetMitre">MITRE sheet</button>
+      <button class="sm" id="presetBoth">Both</button>
+    </div>
+    <div id="collist"></div>
+    <div style="margin-top:14px;text-align:right"><button id="closeCols" class="sm">done</button></div></div>`;
+  document.body.appendChild(m);
+  const draw=()=>{const l=m.querySelector("#collist");l.innerHTML="";
+    opts.forEach(c=>{const row=document.createElement("label");row.className="rule";row.style.cursor="pointer";
+      const cb=document.createElement("input");cb.type="checkbox";cb.checked=!hiddenCols.has(c.key);
+      cb.onchange=()=>{if(cb.checked)hiddenCols.delete(c.key);else hiddenCols.add(c.key);saveCols();syncCols();render();};
+      const s=document.createElement("span");s.className="pat";s.textContent=c.h;
+      row.appendChild(cb);row.appendChild(s);l.appendChild(row);});};
+  const preset=(hide)=>{hiddenCols=new Set(hide);saveCols();syncCols();render();draw();};
+  m.querySelector("#presetTester").onclick=()=>preset(["mitre"]);
+  m.querySelector("#presetMitre").onclick=()=>preset(["tester"]);
+  m.querySelector("#presetBoth").onclick=()=>preset([]);
+  draw();
+  m.querySelector("#closeCols").onclick=()=>m.remove();
+  m.onclick=e=>{if(e.target===m)m.remove();};
+}
+$("#colsBtn").onclick=openColsModal;
+syncCols();
+$("#bulkSource").onkeydown=e=>{if(e.key==="Enter")bulkSet("source",$("#bulkSource").value);};
+document.addEventListener("keydown",e=>{
+  if(e.key==="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){e.preventDefault();$("#filter").focus();}
+  if(e.key==="Escape"&&document.activeElement===$("#filter")){$("#filter").value="";render();$("#filter").blur();}});
+loadEngagements();
+</script>
+</body>
+</html>

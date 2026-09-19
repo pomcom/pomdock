@@ -5,29 +5,30 @@ import (
 	"testing"
 )
 
-func TestDashboardCommandCarriesWorkspaceEnvironment(t *testing.T) {
-	original := repoRoot
-	repoRoot = "/tmp/pom dock's"
-	t.Cleanup(func() { repoRoot = original })
-
-	command, err := dashboardCommand()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, expected := range []string{
-		"exec 'env'",
-		shellQuote(workspaceEnv + "=1"),
-		shellQuote("POMDOCK_ROOT=" + repoRoot),
-		"'tui'",
-	} {
-		if !strings.Contains(command, expected) {
-			t.Fatalf("dashboard command %q does not contain %q", command, expected)
-		}
+func TestWorkspaceSessionNameIsStable(t *testing.T) {
+	if workspaceSession != "pomdock" {
+		t.Fatalf("unexpected workspace session name %q", workspaceSession)
 	}
 }
 
-func TestWorkspaceNamesAreStable(t *testing.T) {
-	if workspaceSession != "pomdock" || dashboardWindow != "dashboard" {
-		t.Fatalf("unexpected workspace names: %q %q", workspaceSession, dashboardWindow)
+func TestAttachWorkspaceWindowCommand(t *testing.T) {
+	t.Setenv("TMUX", "")
+	cmd := attachWorkspaceWindowCommand("@7")
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "select-window -t @7 ;") || !strings.Contains(joined, "attach-session -t =pomdock") {
+		t.Fatalf("unexpected attach command outside tmux: %q", joined)
+	}
+
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	joined = strings.Join(attachWorkspaceWindowCommand("@7").Args, " ")
+	if !strings.Contains(joined, "switch-client -t =pomdock") || strings.Contains(joined, "attach-session") {
+		t.Fatalf("unexpected attach command inside tmux: %q", joined)
+	}
+}
+
+func TestReturnToDashboardScriptFallsBackToDetach(t *testing.T) {
+	if !strings.Contains(returnToDashboardScript, "switch-client -l") ||
+		!strings.Contains(returnToDashboardScript, "detach-client") {
+		t.Fatalf("unexpected return script %q", returnToDashboardScript)
 	}
 }

@@ -43,16 +43,6 @@ func TestLegacyContainerDetection(t *testing.T) {
 	}
 }
 
-func TestParseCommandOutput(t *testing.T) {
-	output, cwd := parseCommandOutput("hello\n"+cwdMarker+"/tmp\n", "/home/kali")
-	if output != "hello" {
-		t.Fatalf("output = %q", output)
-	}
-	if cwd != "/tmp" {
-		t.Fatalf("cwd = %q, want /tmp", cwd)
-	}
-}
-
 func TestCreateOptionsFromLabels(t *testing.T) {
 	opts, ok := createOptionsFromLabelMap("client-a", map[string]string{
 		"io.pomdock.role":     "pentest",

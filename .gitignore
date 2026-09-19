@@ -20,3 +20,7 @@ cli/pomdock
 !vendor/atuin/**/*.conf
 mullvad*.zip
 *.wireguard.zip
+
+# Pasted terminal scrollbacks imported via `pomdock report import` — may hold secrets
+*.tmp
+zflog.tmp

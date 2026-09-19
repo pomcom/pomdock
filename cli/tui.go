@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -354,9 +353,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.vmCreateForm = newVMCreateForm()
-		cmds = append(cmds, emit(logMsg{level: "ok", text: fmt.Sprintf(
-			"Provisioning %s '%s' in tmux window %s; Ctrl+B 0 returns here",
-			msg.profile.Label, msg.name, msg.window)}))
+		cmds = append(cmds,
+			emit(logMsg{level: "ok", text: fmt.Sprintf(
+				"Provisioning %s '%s' in tmux window %s; %s",
+				msg.profile.Label, msg.name, msg.window, returnHint())}),
+			attachShellWindowCmd(msg.window, "vm-setup "+msg.name),
+		)
 
 	case containerCommandMsg:
 		m.busy = false
@@ -388,10 +390,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		cmds = append(cmds,
-			emit(logMsg{level: "ok", text: fmt.Sprintf("%s shell window ready for '%s'", msg.kind, msg.target)}),
-			selectShellWindowCmd(msg.window, msg.target),
-			refreshAll(),
+			emit(logMsg{level: "ok", text: fmt.Sprintf("%s window ready for '%s'; %s", msg.kind, msg.target, returnHint())}),
+			attachShellWindowCmd(msg.window, msg.target),
 		)
+
+	case shellDetachedMsg:
+		switch {
+		case msg.err != nil:
+			cmds = append(cmds, emit(logMsg{level: "err", text: fmt.Sprintf("Could not attach to '%s': %v", msg.target, msg.err)}))
+		case msg.switched:
+			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Switched tmux client to '%s' (session %s); %s", msg.target, workspaceSession, returnHint())}))
+		default:
+			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Left '%s'; it keeps running in tmux", msg.target)}))
+		}
+		cmds = append(cmds, tea.ClearScreen, refreshAll())
 
 	case tea.KeyMsg:
 		if m.createForm.active {
@@ -741,7 +753,7 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 						if err != nil {
 							return "RDP failed", err
 						}
-						return fmt.Sprintf("RDP '%s' opened at %s via %s in tmux window %s",
+						return fmt.Sprintf("RDP '%s' at %s via %s runs in tmux window %s (Shells tab)",
 							name, ip, filepath.Base(cmd.Path), window), nil
 					}
 					if err := launchDesktopClient(cmd, 1500*time.Millisecond); err != nil {
@@ -1039,9 +1051,9 @@ func helpLineForTab(tab, width int) string {
 	}
 	if tab == 2 {
 		if width < 100 {
-			return "  ↑↓ select  enter switch  n new  D close  tab switch  q quit"
+			return "  ↑↓ select  enter attach  n new  D close  tab switch  q quit"
 		}
-		return "  ↑↓ select  enter switch  n selected container  D close  Ctrl-b 0 dashboard  q quit"
+		return "  ↑↓ select  enter attach  n new  D close  tab switch  q quit  · " + returnHint()
 	}
 	if width < 112 {
 		return "  ↑↓ select  n new  s/S power  c ssh  r rdp  tab switch  ? help  q quit"
@@ -1094,9 +1106,6 @@ func consoleVMCmd(name string) tea.Cmd {
 }
 
 func runTUI() error {
-	if os.Getenv(workspaceEnv) != "1" {
-		return enterPomdockWorkspace()
-	}
 	m := newTUI()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()

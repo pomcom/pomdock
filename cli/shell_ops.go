@@ -44,7 +44,7 @@ func ListShellSessions() ([]ShellSession, error) {
 		return nil, nil
 	}
 	out, err := exec.Command("tmux", "list-windows", "-t", "="+workspaceSession, "-F",
-		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_shell_kind}\t#{@pomdock_shell_target}\t#{@pomdock_container}").CombinedOutput()
+		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_shell_kind}\t#{@pomdock_shell_target}\t#{@pomdock_container}\t#{@pomdock_job}\t#{@pomdock_vm}").CombinedOutput()
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if tmuxServerAbsent(message) {
@@ -67,12 +67,15 @@ func parseShellSessions(output string) []ShellSession {
 	for _, line := range strings.Split(strings.TrimRight(output, "\r\n"), "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		fields := strings.Split(line, "\t")
-		if len(fields) != 7 {
+		if len(fields) != 9 {
 			continue
 		}
 		kind, target := fields[4], fields[5]
 		if kind == "" && fields[6] != "" {
 			kind, target = "docker", fields[6]
+		}
+		if kind == "" && fields[7] != "" {
+			kind, target = fields[7], fields[8]
 		}
 		if kind == "" || target == "" {
 			continue
@@ -90,14 +93,11 @@ func parseShellSessions(output string) []ShellSession {
 }
 
 func EnsureContainerShell(container string) (string, error) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		return "", fmt.Errorf("tmux is required for persistent shells")
+	if err := requireTmux(); err != nil {
+		return "", err
 	}
 	if ContainerState(container) != "running" {
 		return "", fmt.Errorf("container '%s' is not running", container)
-	}
-	if exec.Command("tmux", "has-session", "-t", "="+workspaceSession).Run() != nil {
-		return "", fmt.Errorf("Pomdock tmux workspace is not running")
 	}
 	if windows, err := ListShellSessions(); err == nil {
 		for _, window := range windows {
@@ -109,33 +109,29 @@ func EnsureContainerShell(container string) (string, error) {
 		return "", err
 	}
 
+	// POMDOCK_ENGAGEMENT arms the container's auto-capture hook (records the
+	// session into the loot dir); gated on this var, so it's a no-op elsewhere.
 	shellCommand := fmt.Sprintf(
-		"exec docker exec -it -w /home/kali/pentest -e TERM=xterm-256color -e COLORTERM=truecolor %s zsh -l",
-		shellQuote(container),
+		"exec docker exec -it -w /home/kali/pentest -e TERM=xterm-256color -e COLORTERM=truecolor -e POMDOCK_ENGAGEMENT=%s %s zsh -l",
+		shellQuote(container), shellQuote(container),
 	)
-	out, err := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
-		"-t", workspaceSession+":", "-n", shellWindowName(container), shellCommand).CombinedOutput()
+	windowID, err := newWorkspaceWindow(shellWindowName(container), shellCommand)
 	if err != nil {
-		return "", fmt.Errorf("create shell window: %s", strings.TrimSpace(string(out)))
+		return "", err
 	}
-	windowID := strings.TrimSpace(string(out))
-	if out, err := exec.Command("tmux", "set-option", "-w", "-t", windowID,
-		"@pomdock_container", container).CombinedOutput(); err != nil {
-		_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
-		return "", fmt.Errorf("label shell window: %s", strings.TrimSpace(string(out)))
+	if err := setWindowOptions(windowID, map[string]string{
+		"@pomdock_container":    container,
+		"@pomdock_shell_kind":   "docker",
+		"@pomdock_shell_target": container,
+	}); err != nil {
+		return "", err
 	}
-	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_shell_kind", "docker").Run()
-	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "@pomdock_shell_target", container).Run()
-	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
 	return windowID, nil
 }
 
 func EnsureVMShell(vm VM) (string, error) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		return "", fmt.Errorf("tmux is required for persistent shells")
-	}
-	if exec.Command("tmux", "has-session", "-t", "="+workspaceSession).Run() != nil {
-		return "", fmt.Errorf("Pomdock tmux workspace is not running")
+	if err := requireTmux(); err != nil {
+		return "", err
 	}
 	if windows, err := ListShellSessions(); err == nil {
 		for _, window := range windows {
@@ -161,23 +157,17 @@ func EnsureVMShell(vm VM) (string, error) {
 	}
 	args := vmSSHArgs(profile, ip)
 	shellCommand := "exec " + shellJoin(append([]string{"ssh"}, args...))
-	out, err := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
-		"-t", workspaceSession+":", "-n", shellWindowName("ssh-"+vm.Name), shellCommand).CombinedOutput()
+	windowID, err := newWorkspaceWindow(shellWindowName("ssh-"+vm.Name), shellCommand)
 	if err != nil {
-		return "", fmt.Errorf("create VM shell window: %s", strings.TrimSpace(string(out)))
+		return "", err
 	}
-	windowID := strings.TrimSpace(string(out))
-	for key, value := range map[string]string{
+	if err := setWindowOptions(windowID, map[string]string{
 		"@pomdock_shell_kind":   "vm",
 		"@pomdock_shell_target": vm.Name,
 		"@pomdock_vm":           vm.Name,
-	} {
-		if out, err := exec.Command("tmux", "set-option", "-w", "-t", windowID, key, value).CombinedOutput(); err != nil {
-			_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
-			return "", fmt.Errorf("label VM shell window: %s", strings.TrimSpace(string(out)))
-		}
+	}); err != nil {
+		return "", err
 	}
-	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "automatic-rename", "off").Run()
 	return windowID, nil
 }
 
@@ -192,14 +182,6 @@ func vmSSHArgs(profile GuestProfile, ip string) []string {
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		profile.SSHUser+"@"+ip)
-}
-
-func SelectShellWindow(windowID string) error {
-	out, err := exec.Command("tmux", "select-window", "-t", windowID).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("select shell window: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func usableTerminalEnv(env []string) []string {

@@ -325,7 +325,7 @@ func TestVMProvisionShellCommandIsQuotedAndValid(t *testing.T) {
 	for _, expected := range []string{
 		shellQuote("/tmp/setup it's.sh"),
 		shellQuote("/tmp/pom dock"),
-		shellQuote("pomdock:dashboard"),
+		"tmux switch-client -l",
 		"This window remains open for diagnosis",
 	} {
 		if !strings.Contains(script, expected) {
@@ -345,7 +345,7 @@ func TestVMRDPShellCommandReturnsAfterFailure(t *testing.T) {
 	for _, want := range []string{
 		shellQuote("/gfx:avc444"),
 		shellQuote("+clipboard"),
-		shellQuote(workspaceSession + ":" + dashboardWindow),
+		"tmux detach-client",
 		"Returning to the dashboard in 8 seconds",
 	} {
 		if !strings.Contains(script, want) {

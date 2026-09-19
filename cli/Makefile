@@ -6,7 +6,8 @@ DESTDIR ?=
 SUDO ?= sudo
 LIBDIR := $(PREFIX)/lib/pomdock
 INSTALL_LIBDIR := $(DESTDIR)$(LIBDIR)
-LDFLAGS := -X 'main.installedRoot=$(LIBDIR)'
+VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || cat ../VERSION 2>/dev/null || echo dev)
+LDFLAGS := -X 'main.installedRoot=$(LIBDIR)' -X 'main.version=$(VERSION)'
 
 build:
 	go mod tidy

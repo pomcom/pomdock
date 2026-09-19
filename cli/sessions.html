@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pomdock sessions</title>
+<style>
+  :root{
+    --base:#000000;--mantle:#0b0f14;--crust:#05080b;--surface0:#161c22;--surface1:#202b31;
+    --surface2:#2b3640;--text:#d8dee9;--subtext:#8d99a6;--overlay:#6b7681;--faint:#4c566a;
+    --blue:#81a1c1;--cyan:#88c0d0;--green:#a3be8c;--peach:#d08770;--red:#bf616a;--yellow:#ebcb8b;
+    --mauve:#b48ead;--accent:#88c0d0;--shadow:rgba(0,0,0,.6);
+    --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,Cantarell,"Noto Sans",sans-serif;
+    --mono:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  :root[data-theme="light"]{
+    --base:#ffffff;--mantle:#f4f6f9;--crust:#eef1f5;--surface0:#eceff4;--surface1:#dde3ec;
+    --surface2:#ccd4e0;--text:#2e3440;--subtext:#434c5e;--overlay:#5b6678;--faint:#aab3c2;
+    --blue:#4c7899;--cyan:#3d8299;--green:#5e8055;--peach:#bf6a4a;--red:#b23b48;--yellow:#9a7414;
+    --mauve:#8a5d86;--accent:#4c7899;--shadow:rgba(60,70,90,.18);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--base);color:var(--text);font-family:var(--ui);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--accent);color:var(--base)}
+  .mono{font-family:var(--mono)}
+  header{position:sticky;top:0;z-index:6;background:var(--mantle);border-bottom:1px solid var(--surface1);padding:0 18px;height:52px;display:flex;gap:12px;align-items:center}
+  h1{font-size:15px;margin:0;font-weight:650;display:flex;align-items:center;gap:8px}
+  h1 .dot{width:9px;height:9px;border-radius:50%;background:conic-gradient(from 90deg,var(--blue),var(--cyan),var(--green),var(--blue))}
+  .seg{display:inline-flex;border:1px solid var(--surface1);border-radius:9px;overflow:hidden}
+  .seg a{padding:6px 13px;font-size:12px;color:var(--subtext);text-decoration:none;background:var(--base)}
+  .seg a+a{border-left:1px solid var(--surface1)}
+  .seg a:hover{color:var(--text);background:var(--surface0)}
+  .seg a.on{background:var(--accent);color:var(--base);font-weight:600}
+  .sep{color:var(--faint)}
+  label{color:var(--subtext);font-size:12px}
+  select,input,button{font-family:var(--ui);font-size:12px;color:var(--text);background:var(--surface0);border:1px solid var(--surface1);border-radius:8px;padding:6px 10px}
+  select:focus,input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+  button{cursor:pointer}
+  button.icon{padding:6px 9px;background:transparent}
+  button:hover{border-color:var(--accent)}
+  .search{position:relative;display:flex;align-items:center}
+  .search svg{position:absolute;left:11px;width:14px;height:14px;fill:var(--overlay)}
+  .search input{padding-left:32px;width:340px;background:var(--base);border-radius:9px}
+  .grow{flex:1}
+  .wrap{display:flex;height:calc(100vh - 52px)}
+  aside{width:280px;flex:none;border-right:1px solid var(--surface1);overflow-y:auto;background:var(--mantle);transition:width .16s,padding .16s}
+  aside.collapsed{width:0;overflow:hidden;border-right:none}
+  aside .head{padding:11px 14px 6px;display:flex;align-items:center;gap:8px;color:var(--overlay);font-size:10px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  .tagbar{display:flex;flex-wrap:wrap;gap:5px;padding:4px 12px 10px;border-bottom:1px solid var(--surface1)}
+  .tagchip{font-size:11px;border:1px solid var(--surface1);border-radius:20px;padding:2px 9px;cursor:pointer;color:var(--subtext);background:var(--base)}
+  .tagchip.on{background:var(--accent);color:var(--base);border-color:var(--accent);font-weight:600}
+  .sess{padding:10px 14px;border-bottom:1px solid var(--surface0);cursor:pointer}
+  .sess:hover{background:var(--surface0)}
+  .sess.active{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+  .sess .t{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sess .m{color:var(--overlay);font-size:11px;margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .tag{display:inline-block;font-size:10px;border-radius:20px;padding:1px 8px;font-weight:600;background:var(--surface1);color:var(--subtext)}
+  .tag.user{background:color-mix(in srgb,var(--green) 22%,transparent);color:var(--green)}
+  .reopen{position:fixed;left:0;top:60px;z-index:5;background:var(--mantle);border:1px solid var(--surface1);border-left:none;border-radius:0 8px 8px 0;padding:8px 6px;cursor:pointer;color:var(--subtext)}
+  main{flex:1;overflow-y:auto}
+  .empty{color:var(--overlay);padding:40px;text-align:center}
+  .entry{border-bottom:1px solid var(--surface0);padding:12px 20px}
+  .entry:target{background:color-mix(in srgb,var(--yellow) 12%,transparent)}
+  .entry .meta{display:flex;gap:10px;align-items:center;color:var(--overlay);font-size:11px;margin-bottom:6px}
+  .entry .when{color:var(--cyan);font-family:var(--mono)}
+  .entry .cwd{font-family:var(--mono)}
+  .entry .cmd{font-family:var(--mono);font-size:13px;color:var(--text);font-weight:600;display:flex;gap:8px;align-items:flex-start;cursor:pointer}
+  .entry .cmd .prompt{color:var(--green);flex:none}
+  .copybtn{font-size:10px;border:1px solid var(--surface1);background:var(--surface0);color:var(--subtext);
+    border-radius:6px;padding:2px 8px;cursor:pointer;flex:none;font-family:var(--ui);opacity:0;transition:opacity .12s}
+  .entry:hover .cmd .copybtn{opacity:1}
+  .copybtn:hover{border-color:var(--accent);color:var(--text)}
+  .outwrap{position:relative}
+  .outwrap .copybtn{position:absolute;top:8px;right:12px;z-index:2}
+  .outwrap:hover .copybtn{opacity:1}
+  pre.out{font-family:var(--mono);font-size:12px;background:var(--crust);border:1px solid var(--surface0);border-radius:9px;padding:10px 12px;margin:8px 0 0;white-space:pre-wrap;word-break:break-word;color:var(--subtext);max-height:340px;overflow:auto}
+  pre.out.collapsed{max-height:64px;overflow:hidden;-webkit-mask-image:linear-gradient(#000 60%,transparent)}
+  .noout{color:var(--faint);font-size:11px;margin-top:6px;font-style:italic}
+  .hl{background:color-mix(in srgb,var(--yellow) 40%,transparent);color:var(--text);border-radius:3px}
+  .hitcmd{font-family:var(--mono);color:var(--text);font-weight:600}
+  .hitsnip{font-family:var(--mono);color:var(--subtext);font-size:11.5px;margin-top:3px}
+  .count{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot"></span>pomdock</h1>
+  <div class="seg"><a href="/">Tracker</a><a class="on" href="/sessions">Sessions</a></div>
+  <button class="icon" id="collapseBtn" title="hide sessions list">⇤</button>
+  <span class="sep">·</span>
+  <label>Engagement</label>
+  <select id="eng"></select>
+  <span class="grow"></span>
+  <button class="icon" id="themeBtn" title="toggle light / dark">☾</button>
+  <div class="search">
+    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+    <input id="q" placeholder="Search all output & commands…">
+  </div>
+</header>
+<div class="wrap">
+  <aside id="aside">
+    <div class="head">Sessions</div>
+    <div class="tagbar" id="tagbar" hidden></div>
+    <div id="sesslist"></div>
+  </aside>
+  <div class="reopen" id="reopen" hidden title="show sessions list">⇥</div>
+  <main id="main"><div class="empty">Pick a session, or search across all output above.</div></main>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+let engName="",sessions=[],current=null,tagFilter="";
+const store={get:k=>{try{return localStorage.getItem("pomdock."+k)||"";}catch(e){return"";}},set:(k,v)=>{try{localStorage.setItem("pomdock."+k,v);}catch(e){}}};
+function applyTheme(t){document.documentElement.dataset.theme=t;$("#themeBtn").textContent=t==="light"?"☀":"☾";store.set("theme",t);}
+applyTheme(store.get("theme")||"dark");
+$("#themeBtn").onclick=()=>applyTheme(document.documentElement.dataset.theme==="light"?"dark":"light");
+
+function esc(s){return (s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function hl(s,q){if(!q)return esc(s);const i=(s||"").toLowerCase().indexOf(q.toLowerCase());if(i<0)return esc(s);
+  return esc(s.slice(0,i))+'<span class="hl">'+esc(s.slice(i,i+q.length))+'</span>'+esc(s.slice(i+q.length));}
+
+// collapse sidebar
+function setCollapsed(c){$("#aside").classList.toggle("collapsed",c);$("#reopen").hidden=!c;store.set("sessAside",c?"1":"");}
+setCollapsed(store.get("sessAside")==="1");
+$("#collapseBtn").onclick=()=>setCollapsed(true);
+$("#reopen").onclick=()=>setCollapsed(false);
+
+async function loadEngagements(){
+  const d=await(await fetch("/api/engagements")).json();
+  const sel=$("#eng");sel.innerHTML="";
+  (d.engagements||[]).forEach(e=>{const o=document.createElement("option");o.value=e.name;o.textContent=`${e.name} · ${e.rows}`;sel.appendChild(o);});
+  const want=new URLSearchParams(location.search).get("name")||d.default;
+  if(want&&[...sel.options].some(o=>o.value===want))sel.value=want;
+  engName=sel.value;loadSessions();
+}
+async function loadSessions(){
+  const d=await(await fetch("/api/sessions?name="+encodeURIComponent(engName))).json();
+  sessions=d.sessions||[];renderTagbar();renderSessList();
+}
+function renderTagbar(){
+  const tags=[...new Set(sessions.map(s=>s.tag).filter(Boolean))];
+  const bar=$("#tagbar");
+  if(tags.length===0){bar.hidden=true;return;}
+  bar.hidden=false;bar.innerHTML="";
+  const mk=(label,val)=>{const c=document.createElement("span");c.className="tagchip"+(tagFilter===val?" on":"");c.textContent=label;
+    c.onclick=()=>{tagFilter=tagFilter===val?"":val;renderTagbar();renderSessList();};return c;};
+  bar.appendChild(mk("all",""));
+  tags.forEach(t=>bar.appendChild(mk(t,t)));
+}
+function renderSessList(){
+  const box=$("#sesslist");
+  const list=sessions.filter(s=>!tagFilter||s.tag===tagFilter);
+  if(list.length===0){box.innerHTML='<div class="empty" style="padding:20px;font-size:12px">No sessions'+(tagFilter?` tagged “${esc(tagFilter)}”`:"")+' yet.<br><br>Record: open a shell via pomdock.<br>Label one: <code class="mono">pdsession recon</code><br><br>Import a paste:<br><code class="mono">pomdock report import file.log -n '+esc(engName)+'</code></div>';return;}
+  box.innerHTML="";
+  list.forEach(s=>{const d=document.createElement("div");d.className="sess";d.dataset.id=s.id;
+    d.innerHTML=`<div class="t">${esc(s.title||s.id)}</div>
+      <div class="m"><span class="tag">${esc(s.source||"session")}</span>${s.tag?`<span class="tag user">${esc(s.tag)}</span>`:""}<span>${esc(s.date||"")}</span></div>`;
+    d.onclick=()=>openSession(s.id);box.appendChild(d);});
+}
+async function openSession(id){
+  const s=await(await fetch(`/api/session?name=${encodeURIComponent(engName)}&id=${encodeURIComponent(id)}`)).json();
+  if(s.error){$("#main").innerHTML=`<div class="empty">error: ${esc(s.error)}</div>`;return;}
+  current=s;document.querySelectorAll(".sess").forEach(el=>el.classList.toggle("active",el.dataset.id===id));renderSession(s,"");
+}
+function copyBtn(text,label){
+  const b=document.createElement("button");b.className="copybtn";b.textContent="copy";b.title=label;
+  b.onclick=ev=>{ev.stopPropagation();navigator.clipboard.writeText(text).then(()=>{b.textContent="✓ copied";setTimeout(()=>b.textContent="copy",1100);})
+    .catch(()=>{const t=document.createElement("textarea");t.value=text;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();b.textContent="✓ copied";setTimeout(()=>b.textContent="copy",1100);});};
+  return b;
+}
+function renderSession(s,q){
+  const main=$("#main");main.innerHTML="";
+  (s.entries||[]).forEach((e,i)=>{const div=document.createElement("div");div.className="entry";div.id="e"+i;
+    const when=e.time?`${e.date} ${e.time}`:(e.date?e.date+" (est.)":"time unknown");
+    const meta=document.createElement("div");meta.className="meta";
+    meta.innerHTML=`<span class="when">${esc(when)}</span>${e.cwd?`<span class="cwd">${esc(e.cwd)}</span>`:""}`;
+    div.appendChild(meta);
+    const cmd=document.createElement("div");cmd.className="cmd";
+    cmd.innerHTML=`<span class="prompt">❯</span><span class="grow">${hl(e.command,q)}</span>`;
+    cmd.appendChild(copyBtn(e.command,"copy command"));
+    div.appendChild(cmd);
+    if((e.output||"").trim()){
+      const long=(e.output||"").split("\n").length>4;
+      const wrap=document.createElement("div");wrap.className="outwrap";
+      const pre=document.createElement("pre");pre.className="out"+(long?" collapsed":"");pre.innerHTML=hl(e.output,q);
+      if(long){pre.title="click to expand";pre.onclick=()=>pre.classList.toggle("collapsed");}
+      wrap.appendChild(pre);wrap.appendChild(copyBtn(e.output,"copy output"));div.appendChild(wrap);
+    }else{const n=document.createElement("div");n.className="noout";n.textContent="(no output captured)";div.appendChild(n);}
+    main.appendChild(div);});
+}
+async function search(q){q=q.trim();
+  if(!q){if(current)renderSession(current,"");else $("#main").innerHTML='<div class="empty">Pick a session, or search across all output above.</div>';return;}
+  const d=await(await fetch(`/api/logsearch?name=${encodeURIComponent(engName)}&q=${encodeURIComponent(q)}`)).json();
+  const hits=d.hits||[];const main=$("#main");
+  if(hits.length===0){main.innerHTML=`<div class="empty">no matches for “${esc(q)}”</div>`;return;}
+  main.innerHTML=`<div class="entry" style="color:var(--overlay)"><span class="count">${hits.length}</span> matches for “${esc(q)}”</div>`;
+  hits.forEach(h=>{const div=document.createElement("div");div.className="entry";
+    const when=h.time?`${h.date} ${h.time}`:(h.date||"est.");
+    div.innerHTML=`<div class="meta"><span class="when">${esc(when)}</span><span class="tag">${h.inOutput?"output":"command"}</span></div>
+      <div class="hitcmd">❯ ${hl(h.command,q)}</div>${h.snippet?`<div class="hitsnip">${hl(h.snippet,q)}</div>`:""}`;
+    div.style.cursor="pointer";
+    div.onclick=async()=>{await openSession(h.sessionId);renderSession(current,q);const el=document.getElementById("e"+h.index);if(el){el.scrollIntoView({block:"center"});location.hash="e"+h.index;}};
+    main.appendChild(div);});
+}
+$("#eng").onchange=e=>{engName=e.target.value;current=null;tagFilter="";$("#q").value="";loadSessions();$("#main").innerHTML='<div class="empty">Pick a session, or search across all output above.</div>';};
+let t;$("#q").oninput=e=>{clearTimeout(t);t=setTimeout(()=>search(e.target.value),160);};
+loadEngagements();
+</script>
+</body>
+</html>

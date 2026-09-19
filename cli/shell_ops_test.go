@@ -22,14 +22,16 @@ func TestShellWindowNameIsStableAndSafe(t *testing.T) {
 }
 
 func TestParseShellSessions(t *testing.T) {
-	sessions := parseShellSessions("@1\t0\t1\tdashboard\t\t\t\n" +
-		"@2\t1\t1\tshell-alpha\t\t\talpha\n" +
-		"@3\t2\t0\tssh-lab\tvm\tlab\t\n")
-	if len(sessions) != 2 {
+	sessions := parseShellSessions("@1\t0\t1\tunlabeled\t\t\t\t\t\n" +
+		"@2\t1\t1\tshell-alpha\t\t\talpha\t\t\n" +
+		"@3\t2\t0\tssh-lab\tvm\tlab\t\t\tlab\n" +
+		"@4\t3\t0\tvm-setup-win\t\t\t\tvm-provision\twin\n")
+	if len(sessions) != 3 {
 		t.Fatalf("got %d sessions", len(sessions))
 	}
 	if sessions[0].Target != "alpha" || sessions[0].Kind != "docker" ||
-		sessions[1].Target != "lab" || sessions[1].Kind != "vm" {
+		sessions[1].Target != "lab" || sessions[1].Kind != "vm" ||
+		sessions[2].Target != "win" || sessions[2].Kind != "vm-provision" {
 		t.Fatalf("sessions not parsed in window order: %#v", sessions)
 	}
 	if !sessions[0].Active || sessions[0].ID != "@2" {

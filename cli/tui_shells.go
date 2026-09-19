@@ -20,6 +20,12 @@ type shellReadyMsg struct {
 	err    error
 }
 
+type shellDetachedMsg struct {
+	target   string
+	switched bool // client was switched to the workspace session (TUI still inside tmux)
+	err      error
+}
+
 func (m tuiModel) selectedShell() *ShellSession {
 	if m.shellCursor < 0 || m.shellCursor >= len(m.shells) {
 		return nil
@@ -41,7 +47,7 @@ func (m *tuiModel) handleShellKey(key string) []tea.Cmd {
 		}
 	case "c", "enter":
 		if shell := m.selectedShell(); shell != nil && !m.busy {
-			return []tea.Cmd{selectShellWindowCmd(shell.ID, shell.Target)}
+			return []tea.Cmd{attachShellWindowCmd(shell.ID, shell.Target)}
 		}
 	case "n":
 		if container := m.selectedContainer(); container != nil && !m.busy {
@@ -114,11 +120,10 @@ func openVMShellCmd(vm VM) tea.Cmd {
 	}
 }
 
-func selectShellWindowCmd(window, target string) tea.Cmd {
-	return func() tea.Msg {
-		if err := SelectShellWindow(window); err != nil {
-			return logMsg{level: "err", text: fmt.Sprintf("Could not open shell '%s': %v", target, err)}
-		}
-		return logMsg{level: "info", text: fmt.Sprintf("Switched to shell window '%s'", target)}
-	}
+// attachShellWindowCmd hands the terminal to tmux so the user lands in the
+// given workspace window. The TUI resumes once they detach (Ctrl-b d).
+func attachShellWindowCmd(window, target string) tea.Cmd {
+	return tea.ExecProcess(attachWorkspaceWindowCommand(window), func(err error) tea.Msg {
+		return shellDetachedMsg{target: target, switched: insideTmux(), err: err}
+	})
 }

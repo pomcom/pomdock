@@ -126,11 +126,6 @@ func containerRunState(status string) string {
 	return "exited"
 }
 
-func ExecInContainer(name string) error {
-	cmd := exec.Command("docker", "exec", "-it", name, "bash", "-l")
-	return runInteractive(cmd)
-}
-
 func StopContainer(name string) error {
 	out, err := exec.Command("docker", "stop", name).CombinedOutput()
 	if err != nil {
@@ -312,37 +307,6 @@ func CopyFromContainer(name, containerSource, hostDestination string) error {
 		return fmt.Errorf("docker cp: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-const cwdMarker = "\x1ePOMDOCK_CWD="
-
-func RunContainerCommand(name, cwd, command string) (string, string, error) {
-	if cwd == "" {
-		cwd = "/home/kali"
-	}
-	script := `cd -- "$1" 2>/dev/null || cd /home/kali
-eval "$2"
-status=$?
-printf '\n\036POMDOCK_CWD=%s\n' "$PWD"
-exit "$status"`
-	out, err := exec.Command("docker", "exec", name, "bash", "-lc", script, "pomdock", cwd, command).CombinedOutput()
-	clean, nextCWD := parseCommandOutput(string(out), cwd)
-	if err != nil {
-		return clean, nextCWD, fmt.Errorf("%v", err)
-	}
-	return clean, nextCWD, nil
-}
-
-func parseCommandOutput(output, fallbackCWD string) (string, string) {
-	nextCWD := fallbackCWD
-	if marker := strings.LastIndex(output, cwdMarker); marker >= 0 {
-		tail := output[marker+len(cwdMarker):]
-		if line, _, _ := strings.Cut(tail, "\n"); strings.TrimSpace(line) != "" {
-			nextCWD = strings.TrimSpace(line)
-		}
-		output = output[:marker]
-	}
-	return strings.TrimRight(output, "\r\n"), nextCWD
 }
 
 func ContainerState(name string) string {

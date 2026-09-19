@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,10 @@ import (
 var (
 	repoRoot      string
 	installedRoot = "/usr/local/lib/pomdock"
+	// version is the CLI version. It defaults to "dev" for a bare `go build`
+	// and is stamped from `git describe` / the VERSION file at release build
+	// time via -ldflags "-X main.version=...". See cli/Makefile.
+	version = "dev"
 )
 
 func main() {
@@ -24,9 +29,19 @@ func main() {
 		Short: "Kali pentest environment manager",
 		Long: styleAccent.Render("pomdock") + " — manage Kali Docker containers and libvirt VMs for pentesting.\n\n" +
 			styleMuted.Render("Run without arguments to open the interactive TUI."),
+		Version:           version,
 		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
 		RunE:              func(_ *cobra.Command, _ []string) error { return runTUI() },
 	}
+	root.SetVersionTemplate("pomdock {{.Version}}\n")
+	// Backend scripts (pentest.sh, kali-vm/*.sh) print their own diagnostics; a
+	// failed run should not be followed by a cobra usage dump. Flag errors keep
+	// the usage text, since there the user did get the invocation wrong.
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w\n\n%s", err, c.UsageString())
+	})
 
 	// Groups
 	docker := &cobra.Command{Use: "docker", Short: "Manage pentest Docker containers"}
@@ -68,11 +83,23 @@ func main() {
 			Short: "Open the interactive TUI (Docker + VMs)",
 			RunE:  func(_ *cobra.Command, _ []string) error { return runTUI() },
 		},
+		&cobra.Command{
+			Use:   "version",
+			Short: "Print the pomdock version",
+			Run:   func(_ *cobra.Command, _ []string) { fmt.Println("pomdock", version) },
+		},
 		docker,
 		vm,
+		reportCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			// The child already reported what went wrong on stderr.
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }

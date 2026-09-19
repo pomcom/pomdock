@@ -14,10 +14,8 @@ var (
 	colorYellow  = lipgloss.Color("#f9e2af")
 	colorRed     = lipgloss.Color("#f38ba8")
 	colorMauve   = lipgloss.Color("#cba6f7")
-	colorTeal    = lipgloss.Color("#94e2d5")
 	colorMuted   = lipgloss.Color("#6c7086")
 	colorOverlay = lipgloss.Color("#313244")
-	colorText    = lipgloss.Color("#cdd6f4")
 
 	styleStep   = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
 	styleOK     = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
@@ -37,10 +35,6 @@ func logOK(f string, a ...any) {
 func logWarn(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleWarn.Render("⚠"), fmt.Sprintf(f, a...))
 }
-func logErr(f string, a ...any) {
-	fmt.Fprintf(os.Stderr, "%s %s\n", styleError.Render("✗"), fmt.Sprintf(f, a...))
-}
-
 func stateColor(s string) string {
 	switch s {
 	case "running":
