@@ -39,22 +39,8 @@ It reads the loot dir read-only and never touches the container image.
 
 ## How reading a recording works
 
-A `script` log is a raw terminal byte stream: zsh's line editor draws the prompt and the
-command you type with carriage returns, backspaces, and cursor-movement escapes,
-redrawing the same line many times for syntax highlighting and autosuggestions. Opening a
-recording runs this pipeline:
-
-1. **Clean** — each physical line is replayed through a small cursor model that honours
-   `\r`, `\b`, and the horizontal cursor escapes, so the command is reconstructed as it
-   finally appeared on screen.
-2. **Split** — the transcript is cut at `pomsession` markers into one logical session per
-   tag.
-3. **Parse** — each segment becomes command-and-output entries.
-4. **Timestamp** — each command is matched against the engagement's Atuin history,
-   floored at the session's start time so a repeated command like `ls` gets this
-   session's time, in order. A command with no Atuin row in that window shows a blank
-   time rather than a guessed one.
-
-Full-screen TUIs (less, htop) render imperfectly, since each physical line is handled
-independently. Imported pasted scrollback has no reliable start time, so its timestamps
-stay best-effort.
+A raw `script` log is full of the line editor's redraw noise. Opening a recording
+reconstructs each typed command (replaying `\r`, `\b`, and cursor moves), splits the
+transcript at `pomsession` markers, and timestamps each command from the engagement's
+Atuin history. Full-screen TUIs (less, htop) render imperfectly; imported pasted logs
+have best-effort timestamps.

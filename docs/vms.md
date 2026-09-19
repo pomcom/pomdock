@@ -1,7 +1,5 @@
 # VMs
 
-Full reference for `pomdock vm`. For the short version see the [README](../README.md).
-
 ## Requirements
 
 On top of the base install (Go, Docker, tmux), VMs need: `qemu-kvm`,

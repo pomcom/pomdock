@@ -1,7 +1,5 @@
 # Docker containers
 
-Full reference for `pomdock docker`. For the short version see the [README](../README.md).
-
 ```bash
 pomdock docker build
 pomdock docker exec                                    # plain
@@ -75,13 +73,13 @@ the container can reach, so bind its listener to the **Docker bridge gateway** �
    ```
 
 2. In Burp: Proxy → Proxy settings → Proxy listeners → edit the listener → **Bind to
-   address: Specific address → `172.17.0.1`**, keep the port (e.g. `8080`).
+   address: Specific address → `172.17.0.1`**, keep the port (e.g. `8081`).
 
 3. From the container, use that gateway as the proxy:
 
    ```bash
-   curl    -x http://172.17.0.1:8080 http://target/
-   curl -k -x http://172.17.0.1:8080 https://target/     # -k skips Burp's CA check
+   curl    -x http://172.17.0.1:8081 http://target/
+   curl -k -x http://172.17.0.1:8081 https://target/     # -k skips Burp's CA check
    ```
 
 Only the host and containers on the bridge can reach this listener; the LAN cannot.
