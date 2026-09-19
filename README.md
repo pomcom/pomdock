@@ -42,6 +42,19 @@ and creates it if absent. It records each engagement's route, so a stopped VPN o
 engagement reconnects with just `exec --name NAME`. `--name` gives an engagement its own
 container, sidecars, loot dir at `~/pentest/NAME`, and history.
 
+## Burp
+
+Burp runs on the host. To let the container reach it without exposing it to the LAN, bind
+Burp's proxy listener to the Docker bridge gateway (usually `172.17.0.1`) instead of "All
+interfaces", then point container tools at `172.17.0.1:8080`:
+
+```bash
+ip -4 addr show docker0 | awk '/inet /{print $2}'    # find the gateway, e.g. 172.17.0.1
+curl -k -x http://172.17.0.1:8080 https://target/    # proxy container traffic through Burp
+```
+
+Both directions, plus the VPN/Tor egress caveat, are in [docs/docker.md](docs/docker.md#burp-suite).
+
 ## Docs
 
 - [Docker](docs/docker.md) — network modes, named engagements, dotfiles, tools, Burp

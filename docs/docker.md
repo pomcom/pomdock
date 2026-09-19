@@ -59,11 +59,45 @@ The installed tool set is defined by the arrays `PENTEST_APT`, `PENTEST_GO`,
 
 ## Burp Suite
 
-Burp runs natively on the host, not inside the container. `pomdock docker burp` just
-prints the setup reminder: point Burp's upstream proxy at gluetun's HTTP proxy so its
-traffic follows the VPN.
+Burp runs natively on the host, not inside the container. `pomdock docker burp` prints
+the setup reminder. Wire it up in one of two directions depending on what you need.
+
+### Container → Burp (intercept the container's traffic)
+
+Point the container's tools at Burp as their HTTP proxy. Burp must listen on an address
+the container can reach, so bind its listener to the **Docker bridge gateway** — not to
+"All interfaces", which would expose Burp to the whole LAN.
+
+1. Find the bridge gateway IP on the host (usually `172.17.0.1`):
+
+   ```bash
+   ip -4 addr show docker0 | awk '/inet /{print $2}'    # e.g. 172.17.0.1/16 → 172.17.0.1
+   ```
+
+2. In Burp: Proxy → Proxy settings → Proxy listeners → edit the listener → **Bind to
+   address: Specific address → `172.17.0.1`**, keep the port (e.g. `8080`).
+
+3. From the container, use that gateway as the proxy:
+
+   ```bash
+   curl    -x http://172.17.0.1:8080 http://target/
+   curl -k -x http://172.17.0.1:8080 https://target/     # -k skips Burp's CA check
+   ```
+
+Only the host and containers on the bridge can reach this listener; the LAN cannot.
+
+The Kali container reaches the host at this gateway in every network mode (it is a
+directly connected route, not the default route the VPN/Tor tunnel replaces). Note that
+Burp's own traffic to the target then leaves from the **host**, bypassing the container's
+VPN or Tor. If the engagement requires all traffic through the tunnel, also chain Burp's
+upstream to gluetun (below) so Burp's egress follows the VPN.
+
+### Burp → gluetun (send Burp's own traffic through the VPN)
 
 - Burp: Project options → Connections → Upstream proxy servers → `localhost:8888`
+
+gluetun's HTTP proxy is published on `127.0.0.1:8888` (loopback only), so Burp reaches it
+on the host and its requests exit via the VPN.
 
 ## Environment variables
 
