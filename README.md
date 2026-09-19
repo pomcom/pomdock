@@ -1,11 +1,12 @@
 # pomdock
 
-Disposable, network-isolated Kali pentest environments from one command, as a Docker
+Disposable, network-isolated pentest/redteam environment from one command, as a Docker
 container or a libvirt VM. All traffic is forced through a VPN kill switch, Tor, or Tor
 over VPN. Each engagement keeps its own loot directory, shell history, and recorded sessions.
 
-> In active development and tuned to my own workflow. **Docker is the path I actually use.**
-> The VM side works but sees less mileage.
+> This repository is heavily tuned to my own workflow. I mainly use the Docker part for
+> engagements. The VM side works but is not used that often and sees less love. The Docker
+> part also works on macOS, though I don't use it there myself.
 
 ![pomdock traffic path](docs/img/traffic.png)
 
