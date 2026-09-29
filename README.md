@@ -28,7 +28,8 @@ for the list.
 ## Use
 
 ```bash
-pomdock                                          # TUI
+pomdock                                          # command overview/help
+pomdock tui                                      # interactive TUI in this terminal
 pomdock docker exec --vpn ~/vpn/mullvad.conf     # Kali shell, all traffic via VPN
 pomdock docker exec --whonix --name acme         # Tor-routed, named engagement
 pomdock report                                   # browse recorded sessions

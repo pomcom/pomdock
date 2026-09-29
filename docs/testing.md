@@ -10,6 +10,7 @@ cd cli && go test ./...
 
 ```bash
 ./test-build.sh
+POMDOCK_TEST_IMAGE=pcm-kali-pentest ./test-build.sh --no-build # test the installed image
 ```
 
 ## Network isolation tests

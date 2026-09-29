@@ -2,9 +2,10 @@
 
 Every shell opened via `pomdock docker exec` (or a Shells-tab window) is recorded with
 `script` into `~/pentest/<engagement>/sessions/`, on a host volume so recordings survive
-`docker rm`. Recording is armed by the `POMDOCK_ENGAGEMENT` variable the container's
-zshrc checks, so it never fires on the host or in a plain `docker exec`. A shell opened
-before the container picked up the hook is not recorded, so open a fresh one.
+`docker rm`. Recording is armed by `POMDOCK_ENGAGEMENT` and handled by the image-owned
+`pomdock-shell` wrapper, so it does not depend on personal dotfiles and never fires on
+the host or in a plain `docker exec`. An image built before this wrapper was added must
+be rebuilt once with `pomdock docker build`.
 
 ## Tagging sub-sessions
 

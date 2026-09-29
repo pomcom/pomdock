@@ -47,6 +47,6 @@ else
 fi
 
 if [[ "${OUT_BIN}" == "${HOME}/.atuin/bin/atuin" ]]; then
-    printf 'export PATH="$HOME/.atuin/bin:$PATH"\n' > "${HOME}/.atuin/bin/env"
+    printf '%s\n' 'export PATH="$HOME/.atuin/bin:$PATH"' > "${HOME}/.atuin/bin/env"
 fi
 echo "Installed patched atuin to ${OUT_BIN}"

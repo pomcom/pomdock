@@ -157,7 +157,7 @@ echo "→ Waiting for VM to get an IP (this may take ~2-3 min on first boot)..."
 VM_IP=""
 VM_MAC="$(virsh domiflist "${VM_NAME}" 2>/dev/null | awk '/network/ && $5 ~ /:/ {print $5; exit}')"
 
-for i in $(seq 1 90); do
+for _ in $(seq 1 90); do
     # 1) Guest agent path (works when qemu-guest-agent is available)
     VM_IP="$(virsh domifaddr "${VM_NAME}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1)"
 
@@ -214,7 +214,7 @@ else
 fi
 
 echo "→ Waiting for SSH login..."
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     if "${SSH_CMD[@]}" "${KALI_USER}@${VM_IP}" "true" >/dev/null 2>&1; then
         break
     fi
@@ -255,7 +255,7 @@ echo "→ Copying Kali setup and patched Atuin..."
 
 echo "→ Shutting down VM for clean snapshot..."
 virsh shutdown "${VM_NAME}" >/dev/null 2>&1 || true
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
     [[ "$(virsh domstate "${VM_NAME}" 2>/dev/null)" == "shut off" ]] && break
     sleep 2
 done

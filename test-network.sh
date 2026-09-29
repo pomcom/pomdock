@@ -64,7 +64,7 @@ done
 
 # ── Colors / output ────────────────────────────────────────────────
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+RED='\033[0;31m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 info() { echo -e "  [*] $*"; }
@@ -81,7 +81,9 @@ cleanup() {
     if [[ "$NO_TEARDOWN" == true ]]; then
         echo ""
         info "Containers kept (--no-teardown):"
-        echo "$remaining" | sed 's/^/    /'
+        while IFS= read -r name; do
+            printf '    %s\n' "$name"
+        done <<< "$remaining"
         info "Remove: docker rm -f \$(docker ps -a --filter name=${RUN_ID} -q)"
     else
         echo ""
@@ -164,8 +166,7 @@ start_gluetun() {
     fi
 
     info "Waiting for VPN tunnel..."
-    local i
-    for i in $(seq 1 60); do
+    for _ in $(seq 1 60); do
         if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q true; then
             err "gluetun exited: $(docker logs --tail 5 "$name" 2>&1 | tr '\n' ' ')"
             return 1
@@ -208,11 +209,10 @@ start_whonix() {
     docker run -d "${run_args[@]}" "$WHONIX_IMAGE" >/dev/null
 
     info "Waiting for Tor bootstrap..."
-    local i
     # Stack mode (Tor through VPN) can take longer to find guard nodes
     local max_wait=90
     [[ -n "$net_arg" ]] && max_wait=150
-    for i in $(seq 1 $max_wait); do
+    for _ in $(seq 1 "$max_wait"); do
         if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q true; then
             err "Whonix gateway exited: $(docker logs --tail 5 "$name" 2>&1 | tr '\n' ' ')"
             return 1

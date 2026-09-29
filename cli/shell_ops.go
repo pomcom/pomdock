@@ -109,12 +109,7 @@ func EnsureContainerShell(container string) (string, error) {
 		return "", err
 	}
 
-	// POMDOCK_ENGAGEMENT arms the container's auto-capture hook (records the
-	// session into the loot dir); gated on this var, so it's a no-op elsewhere.
-	shellCommand := fmt.Sprintf(
-		"exec docker exec -it -w /home/kali/pentest -e TERM=xterm-256color -e COLORTERM=truecolor -e POMDOCK_ENGAGEMENT=%s %s zsh -l",
-		shellQuote(container), shellQuote(container),
-	)
+	shellCommand := containerShellCommand(container)
 	windowID, err := newWorkspaceWindow(shellWindowName(container), shellCommand)
 	if err != nil {
 		return "", err
@@ -164,6 +159,17 @@ func routeBorderColor(route string) string {
 	default:
 		return "white"
 	}
+}
+
+func containerShellCommand(container string) string {
+	// POMDOCK_ENGAGEMENT arms the image-owned recorder. Keep a fallback for
+	// containers created from an older image so their shell remains reachable.
+	shellEntry := "if command -v pomdock-shell >/dev/null 2>&1; then exec pomdock-shell; " +
+		"else echo 'pomdock: rebuild the image to enable session recording' >&2; exec zsh -l; fi"
+	return fmt.Sprintf(
+		"exec docker exec -it -w /home/kali/pentest -e TERM=xterm-256color -e COLORTERM=truecolor -e POMDOCK_ENGAGEMENT=%s %s sh -c %s",
+		shellQuote(container), shellQuote(container), shellQuote(shellEntry),
+	)
 }
 
 func EnsureVMShell(vm VM) (string, error) {

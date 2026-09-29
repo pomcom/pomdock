@@ -43,7 +43,7 @@ RUN printf 'http://eu.mirror.ionos.com/linux/distributions/kali/kali/\nhttp://mi
         python3 python3-pip pipx \
         golang-go \
         bind9-dnsutils \
-        unzip ca-certificates locales passwd sudo \
+        unzip ca-certificates locales passwd sudo util-linux \
     && printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
     && locale-gen en_US.UTF-8 \
     && update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8 \
@@ -61,8 +61,19 @@ ARG USERNAME=kali
 RUN useradd -m -s /bin/zsh -G sudo "$USERNAME" \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
+# Pomdock-owned shell entrypoint and session marker helpers. Keeping these out of
+# the user's dotfiles makes recording work with any zsh configuration.
+COPY scripts/pomdock-shell scripts/pomsession /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/pomdock-shell /usr/local/bin/pomsession \
+    && ln -s pomsession /usr/local/bin/pdsession \
+    && ln -s pomsession /usr/local/bin/pomhelp
+
 USER $USERNAME
 WORKDIR /home/$USERNAME
+
+# Silence Kali's "minimal installation" MOTD (kali-motd honours ~/.hushlogin);
+# a disposable pentest shell does not need the notice on every launch.
+RUN touch /home/$USERNAME/.hushlogin
 
 ENV GOPATH=/home/$USERNAME/go
 ENV PATH=/home/$USERNAME/go/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.cargo/bin:$PATH

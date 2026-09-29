@@ -62,6 +62,20 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestContainerShellCommandUsesRecorder(t *testing.T) {
+	got := containerShellCommand("client's-lab")
+	for _, want := range []string{
+		"POMDOCK_ENGAGEMENT=",
+		"pomdock-shell",
+		"rebuild the image to enable session recording",
+		`'client'"'"'s-lab'`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("container shell command missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestTmuxServerAbsent(t *testing.T) {
 	for _, message := range []string{
 		"no server running on /tmp/tmux-1000/default",

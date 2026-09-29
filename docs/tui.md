@@ -1,8 +1,9 @@
 # TUI
 
-`pomdock` (or `pomdock tui`) opens the interactive terminal UI. It runs directly in your
-terminal and is fine inside an existing tmux session. Persistent shells, VM provisioning,
-and FreeRDP live in a detached tmux session named `pomdock` and are attached on demand.
+`pomdock tui` opens the interactive terminal UI directly in the current terminal and is
+fine inside an existing tmux session. Running `pomdock` without a subcommand prints the
+command overview instead. Persistent shells, VM provisioning, and FreeRDP live in a
+detached tmux session named `pomdock` and are attached on demand.
 
 ## Global keys
 

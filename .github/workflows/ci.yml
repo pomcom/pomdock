@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - run: go mod download
+      - run: go mod verify
+      - name: Verify module files are tidy
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o /tmp/pomdock .
+
+  shell:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax
+        run: bash -n pentest.sh setup-pentest.sh test*.sh scripts/*.sh kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh
+      - name: ShellCheck
+        run: shellcheck --severity=warning pentest.sh setup-pentest.sh test*.sh scripts/*.sh kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh
+      - name: Session marker helper
+        run: |
+          marker="$(POMDOCK_CAPTURE_ACTIVE=1 scripts/pomsession start 'recon::web')"
+          grep -Eq '^###POMDOCK-SESSION::recon-web::[0-9]+###$' <<<"$marker"
+          ! scripts/pomsession status
+
+  package:
+    name: Install layout
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Stage installation
+        working-directory: cli
+        run: make install VERSION=ci PREFIX=/usr/local DESTDIR="$RUNNER_TEMP/pomdock-root" SUDO=
+      - name: Verify staged files
+        run: |
+          test -x "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock"
+          test -x "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/pomdock-shell"
+          "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock" version | grep -Fx 'pomdock ci'

@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="pcm-kali-pentest:test"
+IMAGE="${POMDOCK_TEST_IMAGE:-pcm-kali-pentest:test}"
 CONTAINER="pcm-kali-pentest-test-$$"
 DOTFILES_DIR="${PENTEST_DOTFILES_DIR:-${HOME}/pcm.dot}"
 
@@ -95,6 +95,14 @@ echo ""
 docker cp "${SCRIPT_DIR}/test.sh" "$CONTAINER:/tmp/test.sh"
 docker exec -i "$CONTAINER" bash /tmp/test.sh
 TEST_EXIT=$?
+
+# Exercise the real recording entrypoint without requiring an interactive human.
+info "Testing automatic shell session recording..."
+printf 'pdsession smoke\nprintf "pomdock recording smoke\\n"\nexit\n' \
+    | docker exec -i -e POMDOCK_ENGAGEMENT="$CONTAINER" "$CONTAINER" pomdock-shell >/dev/null
+docker exec -i "$CONTAINER" sh -lc \
+    'log=$(find /home/kali/pentest/sessions -maxdepth 1 -name "*.log" -type f | head -n1); test -n "$log" && grep -q "POMDOCK-SESSION::smoke" "$log" && grep -q "pomdock recording smoke" "$log"'
+ok "Automatic session recording works"
 
 echo ""
 if [[ $TEST_EXIT -eq 0 ]]; then

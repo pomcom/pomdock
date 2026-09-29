@@ -1,10 +1,38 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+func TestShowRootHelp(t *testing.T) {
+	var output bytes.Buffer
+	cmd := &cobra.Command{
+		Use:  "pomdock",
+		Args: cobra.NoArgs,
+		RunE: showRootHelp,
+	}
+	cmd.AddCommand(&cobra.Command{Use: "tui", Run: func(_ *cobra.Command, _ []string) {
+		t.Fatal("tui command must not run for bare pomdock")
+	}})
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs(nil)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bare root command: %v", err)
+	}
+	for _, want := range []string{"Usage:", "pomdock [command]", "tui"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help output missing %q:\n%s", want, output.String())
+		}
+	}
+}
 
 func makeRuntimeRoot(t *testing.T) string {
 	t.Helper()

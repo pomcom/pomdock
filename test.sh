@@ -100,7 +100,7 @@ done
 
 section "── Shell environment ────────────────────────────"
 
-for bin in zsh tmux git fzf nvim; do
+for bin in zsh tmux git fzf nvim script pomdock-shell pomsession pdsession pomhelp; do
     if has "$bin"; then
         pass "$bin  ($(command -v "$bin"))"
     else

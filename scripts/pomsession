@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Add logical markers to an active Pomdock terminal recording.
+
+set -euo pipefail
+
+command_name="$(basename "$0")"
+if [[ "$command_name" == "pdsession" ]]; then
+    set -- start "$@"
+elif [[ "$command_name" == "pomhelp" ]]; then
+    set -- help "$@"
+fi
+
+usage() {
+    cat <<'EOF'
+Usage:
+  pomsession start TAG   begin a tagged section in the current recording
+  pomsession status      show whether this shell is being recorded
+  pomsession help        show this help
+
+Short forms:
+  pdsession TAG          same as: pomsession start TAG
+  pomhelp                same as: pomsession help
+EOF
+}
+
+case "${1:-help}" in
+    start)
+        shift
+        tag="${*:-}"
+        if [[ -z "$tag" ]]; then
+            printf 'pomsession: a tag is required\n' >&2
+            usage >&2
+            exit 2
+        fi
+        if [[ "${POMDOCK_CAPTURE_ACTIVE:-}" != "1" ]]; then
+            printf 'pomsession: this shell is not being recorded\n' >&2
+            exit 1
+        fi
+        tag="${tag//$'\n'/ }"
+        tag="${tag//::/-}"
+        tag="${tag//###/-}"
+        printf '\n###POMDOCK-SESSION::%s::%s###\n' "$tag" "$(date +%s)"
+        ;;
+    status)
+        if [[ "${POMDOCK_CAPTURE_ACTIVE:-}" == "1" ]]; then
+            printf 'recording: active\nlog: %s\n' "${POMDOCK_SESSION_LOG:-unknown}"
+        else
+            printf 'recording: inactive\n'
+            exit 1
+        fi
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        printf 'pomsession: unknown command: %s\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

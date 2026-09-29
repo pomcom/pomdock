@@ -28,10 +28,11 @@ func main() {
 		Use:   "pomdock",
 		Short: "Kali pentest environment manager",
 		Long: styleAccent.Render("pomdock") + " — manage Kali Docker containers and libvirt VMs for pentesting.\n\n" +
-			styleMuted.Render("Run without arguments to open the interactive TUI."),
+			styleMuted.Render("Run 'pomdock tui' to open the interactive terminal UI."),
 		Version:           version,
 		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
-		RunE:              func(_ *cobra.Command, _ []string) error { return runTUI() },
+		Args:              cobra.NoArgs,
+		RunE:              showRootHelp,
 	}
 	root.SetVersionTemplate("pomdock {{.Version}}\n")
 	// Backend scripts (pentest.sh, kali-vm/*.sh) print their own diagnostics; a
@@ -80,7 +81,7 @@ func main() {
 	root.AddCommand(
 		&cobra.Command{
 			Use:   "tui",
-			Short: "Open the interactive TUI (Docker + VMs)",
+			Short: "Open the interactive TUI in the current terminal (Docker + VMs)",
 			RunE:  func(_ *cobra.Command, _ []string) error { return runTUI() },
 		},
 		&cobra.Command{
@@ -102,6 +103,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+}
+
+func showRootHelp(cmd *cobra.Command, _ []string) error {
+	return cmd.Help()
 }
 
 func findRepoRoot() string {

@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version label for a dry-run artifact
+        required: false
+        default: dev
+
+permissions:
+  contents: write
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Build installable archive
+        env:
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/pomdock-root"
+          mkdir -p dist
+          make -C cli install VERSION="$RELEASE_VERSION" PREFIX=/usr/local DESTDIR="$stage" SUDO=
+          archive="pomdock-${RELEASE_VERSION}-linux-amd64.tar.gz"
+          tar -C "$stage" -czf "dist/$archive" usr/local
+          (cd dist && sha256sum "$archive" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pomdock-linux-amd64
+          path: dist/*
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
