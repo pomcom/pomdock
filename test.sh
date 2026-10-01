@@ -33,7 +33,9 @@ section "── Go tools ──────────────────�
 
 for bin in ffuf gobuster nuclei httpx subfinder katana naabu dnsx \
            alterx gitleaks gospider jsluice tlsx asnmap \
-           mapcidr interactsh-client uncover cvemap; do
+           mapcidr interactsh-client uncover cvemap \
+           assetfinder waybackurls meg gf anew unfurl qsreplace gron \
+           kxss inscope; do
     if has "$bin"; then
         pass "$bin  ($(command -v "$bin"))"
     else
@@ -42,6 +44,12 @@ for bin in ffuf gobuster nuclei httpx subfinder katana naabu dnsx \
         info "GOPATH=${GOPATH:-unset}  PATH contains go/bin: $(echo "$PATH" | grep -q go/bin && echo yes || echo NO)"
     fi
 done
+
+if compgen -G "$HOME/.gf/*.json" >/dev/null; then
+    pass "gf patterns  ($(find "$HOME/.gf" -name '*.json' | wc -l) in ~/.gf)"
+else
+    fail "gf patterns missing from ~/.gf"
+fi
 
 # ── Binary releases (setup-pentest.sh: PENTEST_BINS) ─────────────
 
