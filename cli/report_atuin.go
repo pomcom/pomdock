@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -170,8 +171,38 @@ func atuinMountSources(names []string) map[string]string {
 	return res
 }
 
+// Discovery runs docker ps/inspect and snapshots every engagement's DB, and the
+// web UI needs a name -> DB lookup on every request, so the result is reused for
+// a few seconds instead of being rebuilt per call.
+const engagementCacheTTL = 5 * time.Second
+
+var engagementCache struct {
+	sync.Mutex
+	at   time.Time
+	list []Engagement
+}
+
+// cachedEngagements returns listEngagements, reusing a result younger than
+// engagementCacheTTL. refresh forces a rebuild.
+func cachedEngagements(refresh bool) ([]Engagement, error) {
+	engagementCache.Lock()
+	defer engagementCache.Unlock()
+	if !refresh && engagementCache.list != nil && time.Since(engagementCache.at) < engagementCacheTTL {
+		return engagementCache.list, nil
+	}
+	list, err := listEngagements()
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []Engagement{}
+	}
+	engagementCache.list, engagementCache.at = list, time.Now()
+	return list, nil
+}
+
 func engagementDB(name string) (string, error) {
-	engs, err := listEngagements()
+	engs, err := cachedEngagements(false)
 	if err != nil {
 		return "", err
 	}
@@ -180,15 +211,111 @@ func engagementDB(name string) (string, error) {
 			return e.DB, nil
 		}
 	}
+	// A brand-new engagement may have appeared since the cache was filled.
+	if engs, err = cachedEngagements(true); err == nil {
+		for _, e := range engs {
+			if e.Name == name {
+				return e.DB, nil
+			}
+		}
+	}
 	return "", fmt.Errorf("engagement %q not found under %s", name, pentestLootDir())
 }
 
+// dbSignature identifies one state of an atuin DB: size and mtime of the main
+// file and its WAL. Any new command changes it, so it keys derived caches.
+type dbSignature struct {
+	size, mtime, walSize, walMtime int64
+}
+
+func signatureOf(db string) dbSignature {
+	var sig dbSignature
+	if info, err := os.Stat(db); err == nil {
+		sig.size, sig.mtime = info.Size(), info.ModTime().UnixNano()
+	}
+	if info, err := os.Stat(db + "-wal"); err == nil {
+		sig.walSize, sig.walMtime = info.Size(), info.ModTime().UnixNano()
+	}
+	return sig
+}
+
+var rowCountCache = struct {
+	sync.Mutex
+	m map[string]rowCount
+}{m: map[string]rowCount{}}
+
+type rowCount struct {
+	sig dbSignature
+	n   int
+}
+
 func countRows(db string) int {
+	sig := signatureOf(db)
+	rowCountCache.Lock()
+	if c, ok := rowCountCache.m[db]; ok && c.sig == sig {
+		rowCountCache.Unlock()
+		return c.n
+	}
+	rowCountCache.Unlock()
+
 	var n int
 	_ = withSnapshotDB(db, func(conn *sql.DB) error {
 		return conn.QueryRow("select count(*) from history where deleted_at is null").Scan(&n)
 	})
+	rowCountCache.Lock()
+	rowCountCache.m[db] = rowCount{sig: sig, n: n}
+	rowCountCache.Unlock()
 	return n
+}
+
+// atuinTimestamps maps each trimmed command to its ascending timestamps (ns).
+type atuinTimestamps map[string][]int64
+
+var timestampCache = struct {
+	sync.Mutex
+	m map[string]timestampIndex
+}{m: map[string]timestampIndex{}}
+
+type timestampIndex struct {
+	sig dbSignature
+	idx atuinTimestamps
+}
+
+// historyTimestamps loads the command -> timestamps index for an atuin DB once
+// per DB state. Callers must treat the returned map as read-only.
+func historyTimestamps(db string) atuinTimestamps {
+	sig := signatureOf(db)
+	timestampCache.Lock()
+	if c, ok := timestampCache.m[db]; ok && c.sig == sig {
+		timestampCache.Unlock()
+		return c.idx
+	}
+	timestampCache.Unlock()
+
+	idx := atuinTimestamps{}
+	_ = withSnapshotDB(db, func(conn *sql.DB) error {
+		rows, err := conn.Query(`select timestamp, command from history where deleted_at is null`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ts int64
+			var cmd string
+			if rows.Scan(&ts, &cmd) == nil {
+				c := strings.TrimSpace(cmd)
+				idx[c] = append(idx[c], ts)
+			}
+		}
+		return rows.Err()
+	})
+	for c := range idx {
+		sort.Slice(idx[c], func(a, b int) bool { return idx[c][a] < idx[c][b] })
+	}
+	timestampCache.Lock()
+	timestampCache.m[db] = timestampIndex{sig: sig, idx: idx}
+	timestampCache.Unlock()
+	return idx
 }
 
 // withSnapshotDB copies the atuin DB (and its -wal/-shm sidecars) to a private

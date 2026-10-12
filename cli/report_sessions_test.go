@@ -165,3 +165,27 @@ func TestScriptStartNS(t *testing.T) {
 		t.Fatal("missing header should yield 0")
 	}
 }
+
+func TestRenderLineEscapes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"colon truecolor sgr", "\x1b[38:2:255:0:0mred\x1b[0m text", "red text"},
+		{"private mode sequence", "\x1b[>4;1mvim\x1b[>4;0m", "vim"},
+		{"bracketed paste toggles", "\x1b[?2004hls -la\x1b[?2004l", "ls -la"},
+		{"delete chars", "nmapp\x1b[1D\x1b[1P -sV", "nmap -sV"},
+		{"insert blanks", "ab\x1b[1D\x1b[2@xx", "axxb"},
+		{"erase chars keeps cursor", "secret\x1b[6D\x1b[6Xok", "ok"},
+		{"tab stops", "PORT\tSTATE", "PORT    STATE"},
+		{"tab does not erase", "abcdefghij\r\tX", "abcdefghXj"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := renderLine(tt.in); got != tt.want {
+				t.Errorf("renderLine(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

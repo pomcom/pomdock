@@ -91,7 +91,7 @@ func main() {
 		},
 		docker,
 		vm,
-		reportCmd(),
+		webCmd(),
 	)
 
 	if err := root.Execute(); err != nil {

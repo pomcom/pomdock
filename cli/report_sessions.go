@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -159,28 +159,9 @@ func max(a, b int) int {
 // keeps the old global-earliest behavior (used for pasted scrollback, which has
 // no reliable start time).
 func enrichTimestamps(engagement string, entries []SessionEntry, dateOverride string, floorNS int64) int {
-	db, err := engagementDB(engagement)
-	hist := map[string][]int64{} // command -> ascending timestamps
-	if err == nil {
-		_ = withSnapshotDB(db, func(conn *sql.DB) error {
-			rows, qerr := conn.Query(`select timestamp, command from history where deleted_at is null`)
-			if qerr != nil {
-				return qerr
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var ts int64
-				var cmd string
-				if rows.Scan(&ts, &cmd) == nil {
-					c := strings.TrimSpace(cmd)
-					hist[c] = append(hist[c], ts)
-				}
-			}
-			return nil
-		})
-	}
-	for c := range hist {
-		sort.Slice(hist[c], func(a, b int) bool { return hist[c][a] < hist[c][b] })
+	hist := atuinTimestamps{}
+	if db, err := engagementDB(engagement); err == nil {
+		hist = historyTimestamps(db)
 	}
 	// pick returns the earliest timestamp for cmd at or after floor (or the
 	// global earliest when floor is 0), and whether one was found.
@@ -253,12 +234,12 @@ func importPastedLog(srcPath, engagement, dateOverride string) (*Session, int, e
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, 0, err
 	}
 	f := filepath.Join(dir, sess.ID+".json")
 	buf, _ := json.MarshalIndent(sess, "", "  ")
-	if err := os.WriteFile(f, buf, 0o644); err != nil {
+	if err := os.WriteFile(f, buf, 0o600); err != nil {
 		return nil, 0, err
 	}
 	return sess, matched, nil
@@ -298,10 +279,54 @@ func sessionFiles(engagement string) ([]string, error) {
 	return out, nil
 }
 
+// Parsing a capture (escape replay, splitting, atuin timestamping) is the
+// expensive part of every Sessions request, so results are kept per file and
+// reused until the file or the engagement's atuin DB changes. A live recording
+// grows with every command, so its entry is simply rebuilt on the next request.
+var sessionCache = struct {
+	sync.Mutex
+	m map[string]sessionCacheEntry
+}{m: map[string]sessionCacheEntry{}}
+
+type sessionCacheEntry struct {
+	size, mtime int64
+	atuin       dbSignature
+	sessions    []*Session
+}
+
 // loadSessions dispatches by file type and can return several logical sessions
 // from a single capture: imported JSON is one session; a raw `script` .log is
-// split at `pdsession <tag>` markers into one tagged session per segment.
+// split at `pdsession <tag>` markers into one tagged session per segment. The
+// returned sessions are shared with the cache and must not be modified.
 func loadSessions(path, engagement string) ([]*Session, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	var atuin dbSignature
+	if db, err := engagementDB(engagement); err == nil {
+		atuin = signatureOf(db)
+	}
+	key := engagement + "\x00" + path
+	sessionCache.Lock()
+	c, ok := sessionCache.m[key]
+	sessionCache.Unlock()
+	if ok && c.size == info.Size() && c.mtime == info.ModTime().UnixNano() && c.atuin == atuin {
+		return c.sessions, nil
+	}
+	sessions, err := parseSessionFile(path, engagement)
+	if err != nil {
+		return nil, err
+	}
+	sessionCache.Lock()
+	sessionCache.m[key] = sessionCacheEntry{
+		size: info.Size(), mtime: info.ModTime().UnixNano(), atuin: atuin, sessions: sessions,
+	}
+	sessionCache.Unlock()
+	return sessions, nil
+}
+
+func parseSessionFile(path, engagement string) ([]*Session, error) {
 	if strings.HasSuffix(path, ".json") {
 		s, err := readSession(path)
 		if err != nil {
@@ -404,10 +429,9 @@ func renderLine(line string) string {
 			if col > 0 {
 				col--
 			}
-		case c == '\a', c == '\t': // bell ignored; tab handled crudely as a space
-			if c == '\t' {
-				put(' ')
-			}
+		case c == '\a': // bell ignored
+		case c == '\t': // advance to the next 8-column tab stop without erasing
+			col = (col/8 + 1) * 8
 		case c == 0x1b:
 			i += escLen(rs[i:], &buf, &col)
 		case c < 0x20: // other C0 controls: drop
@@ -431,12 +455,14 @@ func escLen(rs []rune, buf *[]rune, col *int) int {
 	}
 	switch rs[1] {
 	case '[': // CSI: ESC [ params intermediates final
+		// Parameter bytes are the whole 0x30–0x3f range (digits plus : ; < = > ?),
+		// so private modes like ESC[>4;1m and colon sub-parameters like
+		// ESC[38:2:255:0:0m are consumed instead of leaking "4;1m" into the text.
 		j := 2
-		start := j
-		for j < len(rs) && (rs[j] == ';' || rs[j] == '?' || (rs[j] >= '0' && rs[j] <= '9')) {
+		for j < len(rs) && rs[j] >= 0x30 && rs[j] <= 0x3f {
 			j++
 		}
-		params := string(rs[start:j])
+		params := string(rs[2:j])
 		for j < len(rs) && rs[j] >= 0x20 && rs[j] <= 0x2f { // intermediates
 			j++
 		}
@@ -444,8 +470,11 @@ func escLen(rs []rune, buf *[]rune, col *int) int {
 			return j - 1
 		}
 		final := rs[j]
+		if params != "" && strings.ContainsRune("<=>?", rune(params[0])) {
+			return j // private sequence: never moves the cursor or edits text
+		}
 		n := 1
-		if v, ok := firstParam(params); ok {
+		if v, ok := firstParam(params); ok && v > 0 {
 			n = v
 		}
 		switch final {
@@ -458,9 +487,6 @@ func escLen(rs []rune, buf *[]rune, col *int) int {
 			}
 		case 'G': // cursor to column (1-based)
 			*col = n - 1
-			if *col < 0 {
-				*col = 0
-			}
 		case 'K': // erase in line: 0/none = to end (truncate at cursor); 1/2 = clear line
 			if !strings.HasPrefix(params, "1") && !strings.HasPrefix(params, "2") {
 				if *col < len(*buf) {
@@ -468,6 +494,20 @@ func escLen(rs []rune, buf *[]rune, col *int) int {
 				}
 			} else {
 				*buf = (*buf)[:0]
+			}
+		case 'P': // delete n characters at the cursor, shifting the rest left
+			if *col < len(*buf) {
+				end := min(*col+n, len(*buf))
+				*buf = append((*buf)[:*col], (*buf)[end:]...)
+			}
+		case '@': // insert n blanks at the cursor, shifting the rest right
+			if *col < len(*buf) {
+				blanks := []rune(strings.Repeat(" ", n))
+				*buf = append((*buf)[:*col], append(blanks, (*buf)[*col:]...)...)
+			}
+		case 'X': // erase n characters at the cursor without moving it
+			for k := *col; k < *col+n && k < len(*buf); k++ {
+				(*buf)[k] = ' '
 			}
 		}
 		return j
@@ -486,8 +526,7 @@ func escLen(rs []rune, buf *[]rune, col *int) int {
 
 // firstParam returns the first numeric parameter of a CSI param string.
 func firstParam(params string) (int, bool) {
-	params = strings.TrimPrefix(params, "?")
-	if i := strings.IndexByte(params, ';'); i >= 0 {
+	if i := strings.IndexAny(params, ";:"); i >= 0 {
 		params = params[:i]
 	}
 	if params == "" {
