@@ -22,8 +22,8 @@ make install            # PREFIX sets the location
 make completion-zsh
 ```
 
-Needs Go, Docker, and tmux. VMs also need libvirt and QEMU. See [docs/vms.md](docs/vms.md)
-for the list.
+Needs Go, Node 22.18+ (build only), Docker, and tmux. VMs also need libvirt and QEMU.
+See [docs/vms.md](docs/vms.md) for the list.
 
 ## Use
 
@@ -32,7 +32,7 @@ pomdock                                          # command overview/help
 pomdock tui                                      # interactive TUI in this terminal
 pomdock docker exec --vpn ~/vpn/mullvad.conf     # Kali shell, all traffic via VPN
 pomdock docker exec --whonix --name acme         # Tor-routed, named engagement
-pomdock report                                   # browse recorded sessions
+pomdock web                                      # tracker, sessions, containers
 pomdock vm create kali                           # disposable Kali VM
 ```
 
@@ -41,7 +41,7 @@ pomdock docker exec [--vpn FILE] [--whonix] [--name NAME]
 pomdock docker status | stop | rm | logs | burp [--name NAME]
 pomdock vm create [name] [--profile PROFILE] [--iso PATH]
 pomdock vm list | start | stop | ssh | rdp | console | reset | clone | delete NAME
-pomdock report [--name NAME]
+pomdock web [--name NAME] [--port N] [--no-open]
 ```
 
 `exec` attaches if the container runs, restarts it if stopped, builds and creates it if

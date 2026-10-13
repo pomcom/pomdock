@@ -12,10 +12,12 @@ import (
 	"net"
 	"net/http"
 	neturl "net/url"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -28,10 +30,11 @@ const sessionCookie = "pomdock_web"
 
 func webCmd() *cobra.Command {
 	var (
-		name   string
-		port   int
-		noOpen bool
-		tester string
+		name      string
+		port      int
+		noOpen    bool
+		tester    string
+		tokenFile string
 	)
 	cmd := &cobra.Command{
 		Use:     "web",
@@ -42,16 +45,18 @@ func webCmd() *cobra.Command {
 			"  Sessions    recorded shell captures, searchable across commands and output\n" +
 			"  Containers  create, start, stop, recreate and remove pentest containers\n" +
 			"  Shells      open recorded container shells in the pomdock tmux workspace\n\n" +
-			styleMuted.Render("Binds 127.0.0.1 only. The printed URL carries a per-run login token.\n"+
+			styleMuted.Render("Binds 127.0.0.1 only. The printed URL carries a per-run login token;\n"+
+				"--token-file keeps one token (and the login) across restarts.\n"+
 				"Tracker curation is stored in <loot>/.pomdock/tracker.json."),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return serveWeb(webOptions{engagement: name, tester: tester, port: port, open: !noOpen})
+			return serveWeb(webOptions{engagement: name, tester: tester, port: port, open: !noOpen, tokenFile: tokenFile})
 		},
 	}
 	cmd.Flags().StringVarP(&name, "name", "n", "", "engagement to open first (default: pick in the UI)")
 	cmd.Flags().StringVarP(&tester, "tester", "t", "LS", "default value for the Tester column")
 	cmd.Flags().IntVarP(&port, "port", "p", defaultWebPort, "port to bind on 127.0.0.1 (0 = random)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not auto-open the browser")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "read the login token from this file (created mode 0600 if missing)")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeEngagements)
 	cmd.AddCommand(reportImportCmd())
 	return cmd
@@ -107,6 +112,7 @@ type webOptions struct {
 	tester     string
 	port       int
 	open       bool
+	tokenFile  string // stable login token; empty = random per run
 }
 
 type webServer struct {
@@ -132,9 +138,15 @@ func serveWeb(opts webOptions) error {
 	if err != nil {
 		return err
 	}
+	token := randomToken()
+	if opts.tokenFile != "" {
+		if token, err = loadOrCreateToken(opts.tokenFile); err != nil {
+			return err
+		}
+	}
 	srv := &webServer{
 		opts:   opts,
-		token:  randomToken(),
+		token:  token,
 		hosts:  map[string]bool{fmt.Sprintf("127.0.0.1:%d", port): true, fmt.Sprintf("localhost:%d", port): true},
 		static: static,
 		jobs:   newJobRunner(),
@@ -158,6 +170,55 @@ func randomToken() string {
 		panic(err) // crypto/rand never fails on supported platforms
 	}
 	return hex.EncodeToString(b)
+}
+
+// minTokenLen keeps a hand-written token file from weakening the login.
+const minTokenLen = 32
+
+// loadOrCreateToken returns the token stored in path, creating the file with a
+// random token (mode 0600) when it does not exist. An existing file must not be
+// readable by group or others: anyone holding the token controls containers.
+func loadOrCreateToken(path string) (string, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		tok := randomToken()
+		_, err = io.WriteString(f, tok+"\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return "", fmt.Errorf("write token file: %w", err)
+		}
+		logOK("created token file %s", path)
+		return tok, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("create token file: %w (does its directory exist?)", err)
+		}
+		return "", fmt.Errorf("create token file: %w", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("token file %s is not a regular file", path)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("token file %s is accessible by group/others (mode %o); run: chmod 600 %s",
+			path, info.Mode().Perm(), path)
+	}
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	tok := strings.TrimSpace(string(buf))
+	if len(tok) < minTokenLen {
+		return "", fmt.Errorf("token in %s is shorter than %d characters", path, minTokenLen)
+	}
+	return tok, nil
 }
 
 func (s *webServer) handler() http.Handler {
@@ -215,10 +276,16 @@ func (s *webServer) guard(next http.Handler) http.Handler {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{
+			cookie := &http.Cookie{
 				Name: sessionCookie, Value: s.token, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteStrictMode,
-			})
+			}
+			// A stable token outlives this process, so the login may outlive
+			// the browser session too; a per-run token dies with the server.
+			if s.opts.tokenFile != "" {
+				cookie.MaxAge = int((30 * 24 * time.Hour).Seconds())
+			}
+			http.SetCookie(w, cookie)
 			// Drop the token from the address bar; the #fragment survives the
 			// redirect. Always "/" — echoing the request path could be abused
 			// as a protocol-relative open redirect ("//elsewhere").

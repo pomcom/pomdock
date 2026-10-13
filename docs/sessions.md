@@ -18,25 +18,27 @@ pdsession recon             # short alias for the same thing
 pomsession help             # (or pomhelp) list the helpers and show recording state
 ```
 
-Each `pomsession start` writes a marker the report viewer splits on, so one capture can
+Each `pomsession start` writes a marker the Sessions tab splits on, so one capture can
 hold several tagged sessions you filter by in the UI. It warns instead of tagging if the
 shell is not being recorded.
 
 ## Browsing and exporting
 
 ```bash
-pomdock report                                         # or: pomdock tracker
-pomdock report --name acme                          # open an engagement directly
-pomdock report import scrollback.txt --name acme    # import a pasted log
+pomdock web                                      # aliases: tracker, report
+pomdock web --name acme                          # open an engagement directly
+pomdock web import scrollback.txt --name acme    # import a pasted log
 ```
 
-The UI has two tabs:
+Binds 127.0.0.1 only; the printed URL carries a per-run login token. `--token-file FILE`
+keeps one token across restarts (created 0600 if missing). Tabs:
 
 - **Tracker**: the engagement's Atuin history as team-report rows, copyable as TSV.
+  Curation is saved to `<loot>/.pomdock/tracker.json`.
 - **Sessions**: recorded captures and imported logs, searchable across commands and
   output.
-
-It reads the loot dir read-only and never touches the container image.
+- **Containers**: create, start, stop, recreate, and remove pentest containers.
+- **Shells**: open recorded container shells in the pomdock tmux workspace.
 
 ## How reading a recording works
 
