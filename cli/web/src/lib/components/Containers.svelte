@@ -263,7 +263,8 @@
       or “New container” with the same name picks them up again.
     </p>
     <div class="submit">
-      <button class="danger" onclick={() => { confirmRemove = null; run(api.removeContainer(c.name)); }}>Remove</button>
+      <!-- {@const} is a lazy derived: read the name before clearing confirmRemove. -->
+      <button class="danger" onclick={() => { const name = c.name; confirmRemove = null; run(api.removeContainer(name)); }}>Remove</button>
     </div>
   </Modal>
 {/if}
