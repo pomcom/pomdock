@@ -215,3 +215,87 @@ func TestRouteRequestValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadOrCreateToken(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("creates missing file 0600 and reuses it", func(t *testing.T) {
+		path := filepath.Join(dir, "token")
+		tok, err := loadOrCreateToken(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("mode = %o, want 600", info.Mode().Perm())
+		}
+		again, err := loadOrCreateToken(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != tok {
+			t.Errorf("token changed between runs: %q != %q", again, tok)
+		}
+	})
+
+	tests := []struct {
+		name    string
+		content string
+		mode    os.FileMode
+		wantErr string
+	}{
+		{"readable by others", strings.Repeat("a", 48), 0o644, "chmod 600"},
+		{"too short", "short", 0o600, "shorter than"},
+		{"trims whitespace", "  " + strings.Repeat("b", 48) + "\n", 0o600, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-"))
+			if err := os.WriteFile(path, []byte(tt.content), tt.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tt.mode); err != nil { // WriteFile honours umask
+				t.Fatal(err)
+			}
+			tok, err := loadOrCreateToken(path)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tok != strings.TrimSpace(tt.content) {
+				t.Errorf("token = %q", tok)
+			}
+		})
+	}
+
+	if _, err := loadOrCreateToken(filepath.Join(dir, "missing", "token")); err == nil {
+		t.Error("expected error for missing parent directory")
+	}
+}
+
+func TestWebGuardStableTokenCookie(t *testing.T) {
+	for _, tokenFile := range []string{"", "/some/token"} {
+		srv := testWebServer()
+		srv.opts.tokenFile = tokenFile
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/?token=secret-token", nil)
+		req.Host = "127.0.0.1:7332"
+		srv.handler().ServeHTTP(rec, req)
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("tokenFile=%q: got %d cookies", tokenFile, len(cookies))
+		}
+		persistent := cookies[0].MaxAge > 0
+		if persistent != (tokenFile != "") {
+			t.Errorf("tokenFile=%q: MaxAge = %d", tokenFile, cookies[0].MaxAge)
+		}
+	}
+}
