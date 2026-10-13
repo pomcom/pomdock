@@ -31,6 +31,24 @@ jobs:
       - run: go vet ./...
       - run: go build -trimpath -o /tmp/pomdock .
 
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
   shell:
     name: Shell checks
     runs-on: ubuntu-latest
@@ -57,6 +75,11 @@ jobs:
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/web/package-lock.json
       - name: Stage installation
         working-directory: cli
         run: make install VERSION=ci PREFIX=/usr/local DESTDIR="$RUNNER_TEMP/pomdock-root" SUDO=
@@ -64,4 +87,5 @@ jobs:
         run: |
           test -x "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock"
           test -x "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/pomdock-shell"
+          test -n "$(find cli/web/dist/assets -name '*.js')"
           "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock" version | grep -Fx 'pomdock ci'

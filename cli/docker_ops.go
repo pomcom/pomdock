@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,9 +20,11 @@ type Container struct {
 	ID     string
 	Status string // "running" | "exited" | ...
 	Image  string
-	HasVPN bool // a gluetun sidecar is running for this engagement
-	HasTor bool // a whonix/tor sidecar is running for this engagement
-	Legacy bool // created before contextual prompt metadata was introduced
+	HasVPN bool   // a gluetun sidecar is running for this engagement
+	HasTor bool   // a whonix/tor sidecar is running for this engagement
+	Legacy bool   // created before contextual prompt metadata was introduced
+	Route  string // io.pomdock.route label: vpn|direct|tor|tor-vpn, "" if unlabelled
+	VPN    string // io.pomdock.vpn-file label: host path of the VPN profile
 }
 
 type dockerPS struct {
@@ -80,6 +84,8 @@ func ListContainers() ([]Container, error) {
 			Status: status,
 			Image:  ps.Image,
 			Legacy: isLegacyContainer(ps.Labels),
+			Route:  labelValue(ps.Labels, "io.pomdock.route"),
+			VPN:    labelValue(ps.Labels, "io.pomdock.vpn-file"),
 		}
 
 		// Check for sidecars
@@ -97,6 +103,16 @@ func ListContainers() ([]Container, error) {
 		return containers[i].Name < containers[j].Name
 	})
 	return containers, nil
+}
+
+// labelValue reads one key from docker ps's "k=v,k=v" label string.
+func labelValue(labels, key string) string {
+	for _, pair := range strings.Split(labels, ",") {
+		if k, v, ok := strings.Cut(pair, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
 }
 
 func isLegacyContainer(labels string) bool {
@@ -127,20 +143,44 @@ func containerRunState(status string) string {
 }
 
 func StopContainer(name string) error {
-	out, err := exec.Command("docker", "stop", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("docker stop %s: %s", name, strings.TrimSpace(string(out)))
+	return withCapturedOutput(func(w io.Writer) error { return stopContainerTo(name, w) })
+}
+
+func stopContainerTo(name string, w io.Writer) error {
+	return runStreaming(w, "docker stop "+name, "docker", "stop", name)
+}
+
+func StartContainer(name string) error {
+	return withCapturedOutput(func(w io.Writer) error { return startContainerTo(name, w) })
+}
+
+func startContainerTo(name string, w io.Writer) error {
+	if opts, ok := createOptionsFromLabels(name); ok {
+		return createPentestContainerTo(opts, w)
+	}
+	return runStreaming(w, "docker start "+name, "docker", "start", name)
+}
+
+// runStreaming runs a command with stdout and stderr going to w, so long
+// operations (image builds, sidecar startup) can be followed live.
+func runStreaming(w io.Writer, what, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout, cmd.Stderr = w, w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	return nil
 }
 
-func StartContainer(name string) error {
-	if opts, ok := createOptionsFromLabels(name); ok {
-		return CreatePentestContainer(opts)
-	}
-	out, err := exec.Command("docker", "start", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("docker start %s: %s", name, strings.TrimSpace(string(out)))
+// withCapturedOutput adapts a streaming operation to the error-only API: on
+// failure the captured output becomes the error message, as before.
+func withCapturedOutput(fn func(io.Writer) error) error {
+	var buf bytes.Buffer
+	if err := fn(&buf); err != nil {
+		if out := strings.TrimSpace(buf.String()); out != "" {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+		return err
 	}
 	return nil
 }
@@ -192,6 +232,10 @@ func sidecarName(name string, vpn bool) string {
 }
 
 func CreatePentestContainer(opts ContainerCreateOptions) error {
+	return withCapturedOutput(func(w io.Writer) error { return createPentestContainerTo(opts, w) })
+}
+
+func createPentestContainerTo(opts ContainerCreateOptions, w io.Writer) error {
 	script := filepath.Join(repoRoot, "pentest.sh")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Errorf("pentest.sh not found at %s", script)
@@ -204,11 +248,7 @@ func CreatePentestContainer(opts ContainerCreateOptions) error {
 		args = append(args, "--whonix")
 	}
 	args = append(args, "start")
-	out, err := exec.Command("bash", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("create %s: %s", opts.Name, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return runStreaming(w, "create "+opts.Name, "bash", args...)
 }
 
 func RunContainerTool(name, tool string) (string, error) {

@@ -1,0 +1,23 @@
+{
+  "name": "pomdock-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build && touch dist/.gitkeep",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test src/lib/*.test.ts"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "@tsconfig/svelte": "^5.0.4",
+    "svelte": "^5.19.0",
+    "svelte-check": "^4.1.4",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.21"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

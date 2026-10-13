@@ -14,6 +14,11 @@ vendor/atuin/.atuin/
 kali-vm/vm
 cli/pomdock
 
+# web UI build output (embedded by cli/webui.go); .gitkeep keeps the embed compiling
+cli/web/node_modules/
+cli/web/dist/*
+!cli/web/dist/.gitkeep
+
 # VPN configs / key material — never belongs in this repo
 *.ovpn
 *.conf

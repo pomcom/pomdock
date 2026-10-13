@@ -1,4 +1,4 @@
-.PHONY: build clean install completion-zsh
+.PHONY: build build-go web clean install completion-zsh
 
 BINARY := pomdock
 PREFIX ?= /usr/local
@@ -9,14 +9,23 @@ INSTALL_LIBDIR := $(DESTDIR)$(LIBDIR)
 VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || cat ../VERSION 2>/dev/null || echo dev)
 LDFLAGS := -X 'main.installedRoot=$(LIBDIR)' -X 'main.version=$(VERSION)'
 
-build:
+build: web
+	$(MAKE) build-go
+
+# Go only, reusing the last web/dist (fast iteration on backend code).
+build-go:
 	go mod tidy
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 	@echo "Built: ./$(BINARY)"
 	@echo "Usage: ./$(BINARY) --help"
 
+# The Svelte UI is embedded from web/dist; Node is needed at build time only.
+web:
+	cd web && npm ci && npm run build
+
 clean:
 	rm -f $(BINARY)
+	rm -rf web/dist/assets web/dist/index.html web/node_modules
 
 install: build
 	$(SUDO) install -d $(DESTDIR)$(PREFIX)/bin $(INSTALL_LIBDIR)
