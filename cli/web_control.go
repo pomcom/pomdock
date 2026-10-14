@@ -203,6 +203,11 @@ func (s *webServer) handleContainerRecreate(w http.ResponseWriter, r *http.Reque
 		httpError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Recreate keeps the same engagement, so preserve the existing container's
+	// loot dir rather than falling back to pentest.sh's default.
+	if existing, ok := createOptionsFromLabels(name); ok {
+		opts.LootDir = existing.LootDir
+	}
 	s.startJob(w, "recreate", name, func(out io.Writer) error {
 		fmt.Fprintf(out, "removing %s and its sidecars (loot dir is kept)\n", name)
 		if err := RemoveContainerStack(name); err != nil {

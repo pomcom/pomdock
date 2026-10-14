@@ -48,12 +48,16 @@ func TestCreateOptionsFromLabels(t *testing.T) {
 		"io.pomdock.role":     "pentest",
 		"io.pomdock.route":    "tor-vpn",
 		"io.pomdock.vpn-file": "/home/user/client.ovpn",
+		"io.pomdock.loot-dir": "/srv/engagements/client-a/pentest",
 	})
 	if !ok {
 		t.Fatal("expected managed container labels")
 	}
 	if opts.Name != "client-a" || !opts.Whonix || opts.VPNFile != "/home/user/client.ovpn" {
 		t.Fatalf("unexpected options: %#v", opts)
+	}
+	if opts.LootDir != "/srv/engagements/client-a/pentest" {
+		t.Fatalf("loot dir not carried from label: %#v", opts)
 	}
 }
 

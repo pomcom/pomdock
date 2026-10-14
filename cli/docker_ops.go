@@ -39,6 +39,11 @@ type ContainerCreateOptions struct {
 	Name    string
 	VPNFile string
 	Whonix  bool
+	// LootDir is the host loot/history directory to mount. Empty means let
+	// pentest.sh pick its default (~/pentest/<name>). It is carried on the
+	// container as the io.pomdock.loot-dir label so start/recreate from the
+	// web UI or TUI reproduce the original mount instead of the default.
+	LootDir string
 }
 
 // ListContainers returns all Docker containers that look like pomdock pentest containers.
@@ -210,6 +215,7 @@ func createOptionsFromLabelMap(name string, labels map[string]string) (Container
 		Name:    name,
 		VPNFile: labels["io.pomdock.vpn-file"],
 		Whonix:  route == "tor" || route == "tor-vpn",
+		LootDir: labels["io.pomdock.loot-dir"],
 	}, true
 }
 
@@ -248,7 +254,19 @@ func createPentestContainerTo(opts ContainerCreateOptions, w io.Writer) error {
 		args = append(args, "--whonix")
 	}
 	args = append(args, "start")
-	return runStreaming(w, "create "+opts.Name, "bash", args...)
+
+	cmd := exec.Command("bash", args...)
+	cmd.Stdout, cmd.Stderr = w, w
+	cmd.Env = os.Environ()
+	if opts.LootDir != "" {
+		// pentest.sh reads PENTEST_LOOT_DIR to pick the mount; the web service
+		// does not set it, so pass the container's recorded loot dir explicitly.
+		cmd.Env = append(cmd.Env, "PENTEST_LOOT_DIR="+opts.LootDir)
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("create %s: %w", opts.Name, err)
+	}
+	return nil
 }
 
 func RunContainerTool(name, tool string) (string, error) {
