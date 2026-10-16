@@ -23,6 +23,8 @@ type Session struct {
 	Tag        string         `json:"tag"`  // user label from `pdsession <tag>`, "" if none
 	Date       string         `json:"date"` // YYYY-MM-DD
 	Created    int64          `json:"created"`
+	File       string         `json:"file"`               // capture file it came from; one .log can hold several sessions
+	Archived   bool           `json:"archived,omitempty"` // lives under sessions/archive/
 	Entries    []SessionEntry `json:"entries"`
 }
 
@@ -253,10 +255,24 @@ func sanitizeID(s string) string {
 
 // --- reading sessions back ----------------------------------------------------
 
-// sessionFiles returns every session artifact in the engagement's sessions dir:
-// imported .json files and raw `script` .log captures (timing files ignored).
-func sessionFiles(engagement string) ([]string, error) {
+// Archived captures are moved, untouched, into sessions/archive/. sessionFiles
+// skips subdirectories, so they drop out of the list and search without being
+// lost, and restoring is a plain move back.
+const sessionArchiveDir = "archive"
+
+func sessionsDirIn(engagement string, archived bool) (string, error) {
 	dir, err := sessionsDir(engagement)
+	if err != nil || !archived {
+		return dir, err
+	}
+	return filepath.Join(dir, sessionArchiveDir), nil
+}
+
+// sessionFiles returns every session artifact in the engagement's sessions dir
+// (or its archive): imported .json files and raw `script` .log captures
+// (timing files ignored).
+func sessionFiles(engagement string, archived bool) ([]string, error) {
+	dir, err := sessionsDirIn(engagement, archived)
 	if err != nil {
 		return nil, err
 	}
@@ -327,18 +343,29 @@ func loadSessions(path, engagement string) ([]*Session, error) {
 }
 
 func parseSessionFile(path, engagement string) ([]*Session, error) {
+	var sessions []*Session
 	if strings.HasSuffix(path, ".json") {
 		s, err := readSession(path)
 		if err != nil {
 			return nil, err
 		}
-		return []*Session{s}, nil
+		sessions = []*Session{s}
+	} else {
+		var err error
+		if sessions, err = loadCaptureLog(path, engagement); err != nil {
+			return nil, err
+		}
 	}
-	return loadCaptureLog(path, engagement)
+	archived := filepath.Base(filepath.Dir(path)) == sessionArchiveDir
+	for _, s := range sessions {
+		s.File = filepath.Base(path)
+		s.Archived = archived
+	}
+	return sessions, nil
 }
 
-func listSessions(engagement string) ([]Session, error) {
-	files, err := sessionFiles(engagement)
+func listSessions(engagement string, archived bool) ([]Session, error) {
+	files, err := sessionFiles(engagement, archived)
 	if err != nil {
 		return nil, err
 	}
@@ -707,10 +734,17 @@ func readSession(path string) (*Session, error) {
 	return &s, nil
 }
 
-func getSession(engagement, id string) (*Session, error) {
-	files, err := sessionFiles(engagement)
+func getSession(engagement, id string, archived bool) (*Session, error) {
+	s, _, err := findSession(engagement, id, archived)
+	return s, err
+}
+
+// findSession returns the session and the capture file holding it. Session IDs
+// are only ever matched against what was loaded, never joined into a path.
+func findSession(engagement, id string, archived bool) (*Session, string, error) {
+	files, err := sessionFiles(engagement, archived)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
@@ -719,11 +753,88 @@ func getSession(engagement, id string) (*Session, error) {
 		}
 		for _, s := range sessions {
 			if s.ID == id {
-				return s, nil
+				return s, f, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("session %q not found", id)
+	return nil, "", fmt.Errorf("session %q not found", id)
+}
+
+// captureParts is the capture file plus its `script` timing file, if any.
+func captureParts(path string) []string {
+	parts := []string{path}
+	if strings.HasSuffix(path, ".log") {
+		timing := strings.TrimSuffix(path, ".log") + ".timing"
+		if _, err := os.Stat(timing); err == nil {
+			parts = append(parts, timing)
+		}
+	}
+	return parts
+}
+
+func forgetCached(engagement string, paths []string) {
+	sessionCache.Lock()
+	for _, p := range paths {
+		delete(sessionCache.m, engagement+"\x00"+p)
+	}
+	sessionCache.Unlock()
+}
+
+// setSessionArchived moves the capture holding session id into or out of the
+// archive. It works per file, so every session split from that capture moves
+// with it. Returns how many sessions moved.
+func setSessionArchived(engagement, id string, archive bool) (int, error) {
+	_, path, err := findSession(engagement, id, !archive)
+	if err != nil {
+		return 0, err
+	}
+	dst, err := sessionsDirIn(engagement, archive)
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return 0, err
+	}
+	parts := captureParts(path)
+	for _, p := range parts {
+		if _, err := os.Stat(filepath.Join(dst, filepath.Base(p))); err == nil {
+			return 0, fmt.Errorf("%s already exists in %s", filepath.Base(p), dst)
+		}
+	}
+	n := countSessions(path, engagement)
+	for _, p := range parts {
+		if err := os.Rename(p, filepath.Join(dst, filepath.Base(p))); err != nil {
+			return 0, err
+		}
+	}
+	forgetCached(engagement, parts)
+	return n, nil
+}
+
+// deleteSession permanently removes the capture holding session id, together
+// with every other session split from it. Returns how many sessions went.
+func deleteSession(engagement, id string, archived bool) (int, error) {
+	_, path, err := findSession(engagement, id, archived)
+	if err != nil {
+		return 0, err
+	}
+	n := countSessions(path, engagement)
+	parts := captureParts(path)
+	for _, p := range parts {
+		if err := os.Remove(p); err != nil {
+			return 0, err
+		}
+	}
+	forgetCached(engagement, parts)
+	return n, nil
+}
+
+func countSessions(path, engagement string) int {
+	sessions, err := loadSessions(path, engagement)
+	if err != nil {
+		return 1
+	}
+	return len(sessions)
 }
 
 // LogHit is one search match inside a session's commands/output.
@@ -741,7 +852,7 @@ type LogHit struct {
 
 func searchSessions(engagement, q string) ([]LogHit, error) {
 	q = strings.TrimSpace(q)
-	files, err := sessionFiles(engagement)
+	files, err := sessionFiles(engagement, false)
 	if err != nil {
 		return nil, err
 	}

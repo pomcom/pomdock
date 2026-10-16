@@ -234,6 +234,9 @@ func (s *webServer) handler() http.Handler {
 	mux.HandleFunc("PUT /api/prefs", s.handlePrefsPut)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	mux.HandleFunc("DELETE /api/session", s.handleSessionDelete)
+	mux.HandleFunc("POST /api/session/archive", s.handleSessionArchive(true))
+	mux.HandleFunc("POST /api/session/restore", s.handleSessionArchive(false))
 	mux.HandleFunc("GET /api/logsearch", s.handleLogSearch)
 
 	// Container control (web_control.go).
@@ -471,7 +474,7 @@ func (s *webServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sessions, err := listSessions(name)
+	sessions, err := listSessions(name, r.URL.Query().Get("archived") == "1")
 	if err != nil {
 		httpError(w, http.StatusNotFound, err)
 		return
@@ -484,17 +487,63 @@ func (s *webServer) handleSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		httpError(w, http.StatusBadRequest, errors.New("missing ?id="))
+	id, ok := sessionIDParam(w, r)
+	if !ok {
 		return
 	}
-	sess, err := getSession(name, id)
+	sess, err := getSession(name, id, r.URL.Query().Get("archived") == "1")
 	if err != nil {
 		httpError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, sess)
+}
+
+func sessionIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		httpError(w, http.StatusBadRequest, errors.New("missing ?id="))
+		return "", false
+	}
+	return id, true
+}
+
+// handleSessionArchive moves a session's capture file into (archive=true) or
+// out of sessions/archive/. The engagement's atuin history is not touched.
+func (s *webServer) handleSessionArchive(archive bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name, ok := engagementParam(w, r)
+		if !ok {
+			return
+		}
+		id, ok := sessionIDParam(w, r)
+		if !ok {
+			return
+		}
+		n, err := setSessionArchived(name, id, archive)
+		if err != nil {
+			httpError(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "sessions": n})
+	}
+}
+
+func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	name, ok := engagementParam(w, r)
+	if !ok {
+		return
+	}
+	id, ok := sessionIDParam(w, r)
+	if !ok {
+		return
+	}
+	n, err := deleteSession(name, id, r.URL.Query().Get("archived") == "1")
+	if err != nil {
+		httpError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "sessions": n})
 }
 
 func (s *webServer) handleLogSearch(w http.ResponseWriter, r *http.Request) {

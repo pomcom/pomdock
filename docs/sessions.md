@@ -36,7 +36,10 @@ keeps one token across restarts (created 0600 if missing). Tabs:
 - **Tracker**: the engagement's Atuin history as team-report rows, copyable as TSV.
   Curation is saved to `<loot>/.pomdock/tracker.json`.
 - **Sessions**: recorded captures and imported logs, searchable across commands and
-  output.
+  output. **Archive** moves a capture (with its `.timing` file) to
+  `sessions/archive/`, out of the list and search, and can be restored; **Delete**
+  removes it for good. Both act on the whole capture file, so every tagged session in
+  it goes along. Atuin history and tracker curation are never touched.
 - **Containers**: create, start, stop, recreate, and remove pentest containers.
 - **Shells**: open recorded container shells in the pomdock tmux workspace.
 

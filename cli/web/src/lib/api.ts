@@ -27,6 +27,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 }
 
 const q = (name: string) => `name=${encodeURIComponent(name)}`;
+const sq = (name: string, id: string, archived = false) =>
+  `${q(name)}&id=${encodeURIComponent(id)}${archived ? '&archived=1' : ''}`;
 
 export const api = {
   meta: () => request<Meta>('GET', '/api/meta'),
@@ -39,8 +41,16 @@ export const api = {
   prefs: () => request<Prefs | null>('GET', '/api/prefs'),
   savePrefs: (prefs: Prefs) => request<{ ok: boolean }>('PUT', '/api/prefs', prefs),
 
-  sessions: (name: string) => request<{ sessions: Session[] }>('GET', `/api/sessions?${q(name)}`).then((d) => d.sessions),
-  session: (name: string, id: string) => request<Session>('GET', `/api/session?${q(name)}&id=${encodeURIComponent(id)}`),
+  sessions: (name: string, archived = false) =>
+    request<{ sessions: Session[] }>('GET', `/api/sessions?${q(name)}${archived ? '&archived=1' : ''}`).then((d) => d.sessions),
+  session: (name: string, id: string, archived = false) =>
+    request<Session>('GET', `/api/session?${sq(name, id, archived)}`),
+  archiveSession: (name: string, id: string) =>
+    request<{ sessions: number }>('POST', `/api/session/archive?${sq(name, id)}`),
+  restoreSession: (name: string, id: string) =>
+    request<{ sessions: number }>('POST', `/api/session/restore?${sq(name, id)}`),
+  deleteSession: (name: string, id: string, archived: boolean) =>
+    request<{ sessions: number }>('DELETE', `/api/session?${sq(name, id, archived)}`),
   logSearch: (name: string, query: string) =>
     request<{ hits: LogHit[] }>('GET', `/api/logsearch?${q(name)}&q=${encodeURIComponent(query)}`).then((d) => d.hits),
 

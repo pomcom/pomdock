@@ -1,11 +1,12 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import { api } from '../api';
-  import { app, setPref } from '../app.svelte';
+  import { app, setPref, toast } from '../app.svelte';
   import { route, setParams } from '../router.svelte';
   import type { LogHit, Session } from '../types';
   import CopyButton from './CopyButton.svelte';
   import Highlight from './Highlight.svelte';
+  import Modal from './Modal.svelte';
 
   let sessions: Session[] = $state([]);
   let current: Session | null = $state(null);
@@ -16,10 +17,15 @@
   let loadingList = $state(false);
   let highlight = $state(''); // query to highlight inside the open session
   let expanded: Set<number> = $state(new Set());
+  let showArchived = $state(false);
+  let confirmDelete = $state<Session | null>(null);
 
   const collapsed = $derived(!!app.prefs.sessAsideCollapsed);
   const tags = $derived([...new Set(sessions.map((s) => s.tag).filter(Boolean))]);
   const listed = $derived(sessions.filter((s) => !tagFilter || s.tag === tagFilter));
+  // Archive and delete act on the whole capture file, which may hold several
+  // pdsession-tagged sessions; say so before doing it.
+  const siblings = (s: Session) => sessions.filter((o) => o.file === s.file).length;
 
   $effect(() => {
     const name = app.engagement;
@@ -36,7 +42,7 @@
     loadingList = true;
     error = '';
     try {
-      sessions = await api.sessions(name);
+      sessions = await api.sessions(name, showArchived);
       const want = route.params.id;
       if (want && !current) await open(want);
     } catch (e) {
@@ -49,7 +55,7 @@
 
   async function open(id: string, q = '', index = -1) {
     try {
-      current = await api.session(app.engagement, id);
+      current = await api.session(app.engagement, id, showArchived);
       error = '';
     } catch (e) {
       error = (e as Error).message;
@@ -94,14 +100,64 @@
     expanded = next;
   }
 
+  function setArchivedView(on: boolean) {
+    showArchived = on;
+    current = null;
+    tagFilter = '';
+    setParams({ id: '' });
+    loadList(app.engagement);
+  }
+
+  function close() {
+    current = null;
+    setParams({ id: '' });
+  }
+
+  const plural = (n: number) => `${n} session${n === 1 ? '' : 's'}`;
+
+  async function setArchived(s: Session, archive: boolean) {
+    const name = app.engagement;
+    try {
+      const { sessions: n } = archive ? await api.archiveSession(name, s.id) : await api.restoreSession(name, s.id);
+      close();
+      await loadList(name);
+      toast(`${archive ? 'archived' : 'restored'} ${plural(n)}`, () => undo(name, s.id, archive));
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  async function undo(name: string, id: string, archived: boolean) {
+    try {
+      await (archived ? api.restoreSession(name, id) : api.archiveSession(name, id));
+      if (name === app.engagement) await loadList(name);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  async function remove(s: Session) {
+    const name = app.engagement;
+    try {
+      const { sessions: n } = await api.deleteSession(name, s.id, !!s.archived);
+      close();
+      await loadList(name);
+      toast(`deleted ${plural(n)}`);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
   const when = (e: { date: string; time: string }) => (e.time ? `${e.date} ${e.time}` : e.date ? `${e.date} (est.)` : 'time unknown');
 </script>
 
 <div class="sessions">
   <aside class:collapsed>
     <div class="head">
-      <span>Sessions</span>
+      <span>{showArchived ? 'Archived' : 'Sessions'}</span>
       <span class="grow"></span>
+      <button class="sm ghost" class:on={showArchived} title={showArchived ? 'back to active sessions' : 'show archived sessions'}
+        onclick={() => setArchivedView(!showArchived)}>{showArchived ? '← active' : 'archive'}</button>
       <button class="sm ghost" title="re-read recordings" onclick={() => loadList(app.engagement)}>↻</button>
       <button class="sm ghost" title="hide list" onclick={() => setPref('sessAsideCollapsed', true)}>⇤</button>
     </div>
@@ -125,7 +181,11 @@
         </button>
       {:else}
         <div class="hintbox">
-          {#if loadingList}loading…{:else}
+          {#if loadingList}loading…{:else if showArchived}
+            Nothing archived.<br /><br />
+            Archiving moves a recording to <code>sessions/archive/</code>: it leaves this list and the search, and
+            restoring brings it back. Atuin history and the tracker are not touched.
+          {:else}
             No sessions{tagFilter ? ` tagged “${tagFilter}”` : ''} yet.<br /><br />
             Every shell opened through pomdock is recorded automatically.<br />
             Label a section: <code>pdsession recon</code><br /><br />
@@ -142,7 +202,17 @@
         <button class="sm ghost" title="show sessions list" onclick={() => setPref('sessAsideCollapsed', false)}>⇥</button>
       {/if}
       <input class="search" bind:value={query} oninput={onsearch} placeholder="Search all output & commands…" />
-      {#if current}<span class="title">{current.title}</span>{/if}
+      {#if current}
+        {@const c = current}
+        <span class="title">{c.title}</span>
+        <span class="grow"></span>
+        {#if c.archived}
+          <button class="sm" onclick={() => setArchived(c, false)}>Restore</button>
+        {:else}
+          <button class="sm" title="move to sessions/archive/; can be restored" onclick={() => setArchived(c, true)}>Archive</button>
+        {/if}
+        <button class="sm danger" onclick={() => (confirmDelete = c)}>Delete…</button>
+      {/if}
     </div>
     <div class="scroll">
       {#if error}
@@ -181,6 +251,20 @@
   </main>
 </div>
 
+{#if confirmDelete}
+  {@const c = confirmDelete}
+  {@const n = siblings(c)}
+  <Modal title={`Delete “${c.title || c.id}”?`} onclose={() => (confirmDelete = null)}>
+    <p class="warn">
+      Permanently deletes the recording <code>{c.file}</code>{n > 1 ? `, which holds ${n} sessions; all of them go` : ''}.
+      This cannot be undone. Atuin history and the tracker are not touched. To only hide it, use Archive instead.
+    </p>
+    <div class="submit">
+      <button class="danger" onclick={() => { const s = c; confirmDelete = null; remove(s); }}>Delete</button>
+    </div>
+  </Modal>
+{/if}
+
 <style>
   .sessions { display: grid; grid-template-columns: 300px 1fr; height: 100%; min-height: 0; }
   aside { border-right: 1px solid var(--surface1); background: var(--mantle); display: flex; flex-direction: column; min-height: 0; }
@@ -206,6 +290,9 @@
   .hintbox { color: var(--overlay); padding: 20px 14px; font-size: 12px; }
   main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .search { width: 360px; max-width: 60vw; background: var(--base); }
+  .head .on { color: var(--accent); }
+  .warn { color: var(--subtext); font-size: 12.5px; line-height: 1.5; }
+  .submit { margin-top: 12px; text-align: right; }
   .title { color: var(--overlay); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .scroll { flex: 1; overflow: auto; padding: 4px 0 40px; }
   .entry { display: block; width: 100%; text-align: left; padding: 12px 22px; border: none; border-radius: 0; background: none; border-bottom: 1px solid var(--surface0); }

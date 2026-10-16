@@ -28,6 +28,8 @@ export type Session = {
   tag: string;
   date: string;
   created: number;
+  file: string; // capture file; one recording can hold several sessions
+  archived?: boolean;
   entries?: SessionEntry[];
 };
 

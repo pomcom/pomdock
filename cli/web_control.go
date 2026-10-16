@@ -208,7 +208,10 @@ func (s *webServer) handleContainerRecreate(w http.ResponseWriter, r *http.Reque
 		if err := RemoveContainerStack(name); err != nil {
 			return err
 		}
-		return createPentestContainerTo(opts, out)
+		if err := createPentestContainerTo(opts, out); err != nil {
+			return fmt.Errorf("%s was removed but could not be created again (%w); fix the cause, then create it under the same name: the loot dir is kept", name, err)
+		}
+		return nil
 	})
 }
 

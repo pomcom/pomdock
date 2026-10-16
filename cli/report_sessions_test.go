@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +190,89 @@ func TestRenderLineEscapes(t *testing.T) {
 				t.Errorf("renderLine(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSessionArchiveRestoreDelete(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PENTEST_LOOT_DIR", root)
+	loot := filepath.Join(root, "eng")
+	sess := filepath.Join(loot, "sessions")
+	if err := os.MkdirAll(filepath.Join(loot, ".atuin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sess, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(sess, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("../.atuin/history.db", "")
+	write("imp.json", `{"id":"imp","title":"Imported","entries":[{"command":"id"}]}`)
+	write("cap.log", "❯ whoami\nkali\n")
+	write("cap.timing", "0.1 5\n")
+	if _, err := cachedEngagements(true); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := func(archived bool) []string {
+		t.Helper()
+		list, err := listSessions("eng", archived)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, s := range list {
+			if s.Archived != archived {
+				t.Errorf("%s: Archived = %v, want %v", s.ID, s.Archived, archived)
+			}
+			out = append(out, s.ID)
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got := ids(false); strings.Join(got, ",") != "cap,imp" {
+		t.Fatalf("active = %v", got)
+	}
+
+	if _, err := setSessionArchived("eng", "cap", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(false); strings.Join(got, ",") != "imp" {
+		t.Errorf("active after archive = %v", got)
+	}
+	if got := ids(true); strings.Join(got, ",") != "cap" {
+		t.Errorf("archived = %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(sess, "archive", "cap.timing")); err != nil {
+		t.Errorf("timing file did not move with the log: %v", err)
+	}
+	if _, err := setSessionArchived("eng", "cap", true); err == nil {
+		t.Error("archiving an already archived session should fail")
+	}
+
+	if _, err := setSessionArchived("eng", "cap", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(false); strings.Join(got, ",") != "cap,imp" {
+		t.Errorf("active after restore = %v", got)
+	}
+
+	if _, err := deleteSession("eng", "cap", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"cap.log", "cap.timing"} {
+		if _, err := os.Stat(filepath.Join(sess, f)); !os.IsNotExist(err) {
+			t.Errorf("%s still exists after delete", f)
+		}
+	}
+	if _, err := deleteSession("eng", "../imp", false); err == nil {
+		t.Error("unknown id must not resolve to a file")
+	}
+	if got := ids(false); strings.Join(got, ",") != "imp" {
+		t.Errorf("active after delete = %v", got)
 	}
 }
