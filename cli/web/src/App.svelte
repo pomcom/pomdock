@@ -2,6 +2,7 @@
   import { app, init, loadEngagements, selectEngagement, setPref } from './lib/app.svelte';
   import { route, type View } from './lib/router.svelte';
   import Containers from './lib/components/Containers.svelte';
+  import Help from './lib/components/Help.svelte';
   import Sessions from './lib/components/Sessions.svelte';
   import Shells from './lib/components/Shells.svelte';
   import Toast from './lib/components/Toast.svelte';
@@ -22,6 +23,10 @@
         { view: 'containers', label: 'Containers', icon: '◫', engagement: false },
         { view: 'shells', label: 'Shells', icon: '⌘', engagement: false },
       ],
+    },
+    {
+      section: 'Reference',
+      items: [{ view: 'help', label: 'Commands', icon: '?', engagement: false }],
     },
   ];
 
@@ -92,6 +97,8 @@
         <Containers />
       {:else if route.view === 'shells'}
         <Shells />
+      {:else if route.view === 'help'}
+        <Help />
       {/if}
     </main>
   </div>

@@ -1,8 +1,8 @@
 // Hash router: #/<view>?name=<engagement>&id=<session>. Hash-based so every
 // view is a deep link without server-side routes.
 
-export type View = 'tracker' | 'sessions' | 'containers' | 'shells';
-const VIEWS: View[] = ['tracker', 'sessions', 'containers', 'shells'];
+export type View = 'tracker' | 'sessions' | 'containers' | 'shells' | 'help';
+const VIEWS: View[] = ['tracker', 'sessions', 'containers', 'shells', 'help'];
 
 type Route = { view: View; params: Record<string, string> };
 

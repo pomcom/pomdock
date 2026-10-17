@@ -20,6 +20,12 @@ Usage:
 Short forms:
   pdsession TAG          same as: pomsession start TAG
   pomhelp                same as: pomsession help
+
+Lab (containers created with --lab):
+  ip -4 -br addr show tun0   your lab IP
+  pomrdp -u USER HOST        RDP to a lab Windows host (pomrdp -h for options)
+
+All commands: the "Commands" page in pomdock web.
 EOF
 }
 
