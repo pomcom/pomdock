@@ -63,8 +63,8 @@ RUN useradd -m -s /bin/zsh -G sudo "$USERNAME" \
 
 # Pomdock-owned shell entrypoint and session marker helpers. Keeping these out of
 # the user's dotfiles makes recording work with any zsh configuration.
-COPY scripts/pomdock-shell scripts/pomsession /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/pomdock-shell /usr/local/bin/pomsession \
+COPY scripts/pomdock-shell scripts/pomsession scripts/pomrdp /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/pomdock-shell /usr/local/bin/pomsession /usr/local/bin/pomrdp \
     && ln -s pomsession /usr/local/bin/pdsession \
     && ln -s pomsession /usr/local/bin/pomhelp
 

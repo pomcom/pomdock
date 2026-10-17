@@ -83,7 +83,7 @@
   let confirmRemove = $state<ContainerInfo | null>(null);
 
   const knownVPNs = $derived([...new Set(containers.map((c) => c.vpnFile).filter((v): v is string => !!v))]);
-  const needsVPN = $derived(form?.route === 'vpn' || form?.route === 'tor-vpn');
+  const needsVPN = $derived(form?.route === 'vpn' || form?.route === 'tor-vpn' || form?.route === 'lab');
 
   function newForm() {
     form = { mode: 'create', name: '', route: 'vpn', vpnFile: knownVPNs[0] ?? '' };
@@ -96,17 +96,21 @@
   async function submit() {
     if (!form) return;
     const vpn = needsVPN ? form.vpnFile.trim() : '';
-    if (needsVPN && !vpn) return toast('pick a VPN profile for this route');
+    if (needsVPN && !vpn) return toast(form.route === 'lab' ? 'pick the lab .ovpn file' : 'pick a VPN profile for this route');
     const whonix = form.route === 'tor' || form.route === 'tor-vpn';
+    const lab = form.route === 'lab';
     const f = form;
     form = null;
-    await run(f.mode === 'create' ? api.createContainer(f.name.trim(), vpn, whonix) : api.recreateContainer(f.name, vpn, whonix));
+    await run(
+      f.mode === 'create' ? api.createContainer(f.name.trim(), vpn, whonix, lab) : api.recreateContainer(f.name, vpn, whonix, lab),
+    );
   }
 
   const ROUTES: { value: Route; label: string; hint: string }[] = [
     { value: 'vpn', label: 'VPN', hint: 'gluetun kill switch' },
     { value: 'tor', label: 'Tor', hint: 'Whonix-style gateway' },
     { value: 'tor-vpn', label: 'Tor over VPN', hint: 'kali → Tor → VPN' },
+    { value: 'lab', label: 'Lab (HTB / THM)', hint: 'OpenVPN in the container, internet direct' },
     { value: 'direct', label: 'Direct', hint: 'no tunnel' },
   ];
   const fmtTime = (s: number) => new Date(s * 1000).toLocaleTimeString();
@@ -241,7 +245,7 @@
     </div>
     {#if needsVPN}
       <label class="field">
-        <span>VPN profile (WireGuard / OpenVPN file on this host)</span>
+        <span>{form.route === 'lab' ? 'Lab VPN (.ovpn from HackTheBox / TryHackMe, on this host)' : 'VPN profile (WireGuard / OpenVPN file on this host)'}</span>
         <input bind:value={form.vpnFile} list="vpnfiles" placeholder="~/vpn/mullvad.conf" />
         <datalist id="vpnfiles">{#each knownVPNs as v (v)}<option value={v}></option>{/each}</datalist>
       </label>

@@ -120,7 +120,7 @@ func EnsureContainerShell(container string) (string, error) {
 		"@pomdock_shell_target": container,
 	}
 	// Color the window's pane border by network route so the context is
-	// obvious at a glance (green vpn / red direct / magenta tor / cyan tor-vpn).
+	// obvious at a glance (green vpn / red direct / magenta tor / cyan tor-vpn / yellow lab).
 	if route := containerRouteLabel(container); route != "" {
 		color := routeBorderColor(route)
 		opts["@pomdock_route"] = route
@@ -136,7 +136,7 @@ func EnsureContainerShell(container string) (string, error) {
 }
 
 // containerRouteLabel reads the pomdock network route recorded on a container
-// (io.pomdock.route: vpn|direct|tor|tor-vpn), or "" if unavailable.
+// (io.pomdock.route: vpn|direct|tor|tor-vpn|lab), or "" if unavailable.
 func containerRouteLabel(container string) string {
 	out, err := exec.Command("docker", "inspect", "-f",
 		`{{index .Config.Labels "io.pomdock.route"}}`, container).Output()
@@ -156,6 +156,8 @@ func routeBorderColor(route string) string {
 		return "magenta"
 	case "tor-vpn":
 		return "cyan"
+	case "lab":
+		return "yellow"
 	default:
 		return "white"
 	}

@@ -6,6 +6,7 @@ pomdock docker exec                                    # plain
 pomdock docker exec --vpn FILE                          # VPN kill switch
 pomdock docker exec --whonix                            # Tor
 pomdock docker exec --whonix --vpn FILE                 # Tor over VPN
+pomdock docker exec --name thm --lab FILE.ovpn          # HTB/THM lab VPN
 pomdock docker exec --name NAME --vpn FILE              # named engagement
 pomdock docker status
 pomdock docker stop [--name NAME]
@@ -26,6 +27,7 @@ container automatically.
 | `--vpn FILE` | Kali → gluetun → VPN |
 | `--whonix` | Kali → Tor |
 | `--whonix --vpn FILE` | Kali → Tor → VPN |
+| `--lab FILE.ovpn` | lab targets via OpenVPN in Kali, internet direct |
 
 The Kali container always shares the sidecar's network namespace, so a crashed or
 misconfigured tool cannot bypass the tunnel. `--vpn` accepts `.ovpn` (OpenVPN) or
@@ -36,6 +38,33 @@ The route is recorded on the container (labels `io.pomdock.route` and
 `pomdock docker exec --name NAME`: the same VPN config and/or Tor routing is reused.
 Passing `--vpn`/`--whonix` again overrides the recorded route. If the recorded config
 file has since moved, `exec` asks for `--vpn` explicitly.
+
+## Lab VPNs (HackTheBox, TryHackMe)
+
+Lab VPNs only route the lab network and push no default route, so they don't fit
+gluetun: its health check needs internet through the tunnel and it restarts the VPN
+in a loop. `--lab FILE.ovpn` (web UI: route "Lab") instead mounts the config into the
+container and runs OpenVPN there. Lab targets go through `tun0`; apt, pip and GitHub
+go out directly. There is no kill switch; a lab VPN is not for anonymity.
+
+OpenVPN starts with the container and again on every start, and `exec` restarts it if
+it died. `exec`/`start` print your lab IP (`tun0`), the one to use for reverse shells
+and listeners. Log: `docker exec NAME cat /tmp/lab-openvpn.log`.
+
+### RDP and browsing in the lab
+
+The lab is only reachable from inside the container, so GUI clients run there and
+show up on your desktop over X11 (the container must be created from a desktop
+session, so `DISPLAY` is set):
+
+```bash
+pomrdp -u Administrator -p 'Passw0rd!' 10.10.10.5     # xfreerdp3, cert ignored, clipboard
+pomrdp -d CORP -u alice -H <nthash> 10.10.10.5        # pass-the-hash (Restricted Admin)
+firefox &                                             # lab web apps
+```
+
+Inside an RDP session, `\\tsclient\loot` is the container's `~/pentest` (the loot dir), handy
+for moving tools and loot. Extra xfreerdp options go after `--`.
 
 ## Named engagements
 

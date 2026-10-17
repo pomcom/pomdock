@@ -23,8 +23,8 @@ type Container struct {
 	HasVPN bool   // a gluetun sidecar is running for this engagement
 	HasTor bool   // a whonix/tor sidecar is running for this engagement
 	Legacy bool   // created before contextual prompt metadata was introduced
-	Route  string // io.pomdock.route label: vpn|direct|tor|tor-vpn, "" if unlabelled
-	VPN    string // io.pomdock.vpn-file label: host path of the VPN profile
+	Route  string // io.pomdock.route label: vpn|direct|tor|tor-vpn|lab, "" if unlabelled
+	VPN    string // io.pomdock.vpn-file label: host path of the VPN (or lab VPN) profile
 }
 
 type dockerPS struct {
@@ -39,6 +39,9 @@ type ContainerCreateOptions struct {
 	Name    string
 	VPNFile string
 	Whonix  bool
+	// Lab makes VPNFile an HTB/THM lab .ovpn: OpenVPN runs inside the
+	// container and the internet route stays direct (pentest.sh --lab).
+	Lab bool
 }
 
 // ListContainers returns all Docker containers that look like pomdock pentest containers.
@@ -210,6 +213,7 @@ func createOptionsFromLabelMap(name string, labels map[string]string) (Container
 		Name:    name,
 		VPNFile: labels["io.pomdock.vpn-file"],
 		Whonix:  route == "tor" || route == "tor-vpn",
+		Lab:     route == "lab",
 	}, true
 }
 
@@ -241,7 +245,10 @@ func createPentestContainerTo(opts ContainerCreateOptions, w io.Writer) error {
 		return fmt.Errorf("pentest.sh not found at %s", script)
 	}
 	args := []string{script, "--name", opts.Name}
-	if opts.VPNFile != "" {
+	switch {
+	case opts.Lab:
+		args = append(args, "--lab", opts.VPNFile)
+	case opts.VPNFile != "":
 		args = append(args, "--vpn", opts.VPNFile)
 	}
 	if opts.Whonix {

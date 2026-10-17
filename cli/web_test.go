@@ -197,6 +197,9 @@ func TestRouteRequestValidation(t *testing.T) {
 		{"vpn file", routeRequest{VPNFile: vpn, Whonix: true}, false},
 		{"vpn dir", routeRequest{VPNFile: dir}, true},
 		{"vpn missing", routeRequest{VPNFile: filepath.Join(dir, "nope")}, true},
+		{"lab", routeRequest{VPNFile: vpn, Lab: true}, false},
+		{"lab without file", routeRequest{Lab: true}, true},
+		{"lab with tor", routeRequest{VPNFile: vpn, Lab: true, Whonix: true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,8 +207,8 @@ func TestRouteRequestValidation(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
-			if err == nil && opts.Whonix != tt.req.Whonix {
-				t.Errorf("whonix not carried over")
+			if err == nil && (opts.Whonix != tt.req.Whonix || opts.Lab != tt.req.Lab) {
+				t.Errorf("route not carried over: %#v", opts)
 			}
 		})
 	}

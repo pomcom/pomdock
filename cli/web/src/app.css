@@ -8,7 +8,7 @@
   --accent: #88c0d0; --int: #81a1c1; --ext: #d08770; --shadow: rgba(0, 0, 0, .6);
   /* network routes: same colours as the tmux pane borders */
   --route-vpn: var(--green); --route-direct: var(--red);
-  --route-tor: var(--mauve); --route-tor-vpn: var(--cyan);
+  --route-tor: var(--mauve); --route-tor-vpn: var(--cyan); --route-lab: var(--yellow);
   --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
   --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   color-scheme: dark;
@@ -65,6 +65,7 @@ label { color: var(--subtext); font-size: 12px; }
 .route-direct { background: var(--route-direct); }
 .route-tor { background: var(--route-tor); }
 .route-tor-vpn { background: var(--route-tor-vpn); }
+.route-lab { background: var(--route-lab); }
 .bar {
   display: flex; flex-wrap: wrap; gap: 9px 12px; align-items: center; padding: 10px 18px;
   background: var(--mantle); border-bottom: 1px solid var(--surface1);

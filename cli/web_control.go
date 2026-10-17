@@ -26,7 +26,7 @@ type containerView struct {
 	Name       string `json:"name"`
 	State      string `json:"state"` // running | exited
 	Image      string `json:"image"`
-	Route      string `json:"route"` // vpn | direct | tor | tor-vpn | ""
+	Route      string `json:"route"` // vpn | direct | tor | tor-vpn | lab | ""
 	VPNFile    string `json:"vpnFile,omitempty"`
 	HasVPN     bool   `json:"hasVpn"`
 	HasTor     bool   `json:"hasTor"`
@@ -89,6 +89,7 @@ type routeRequest struct {
 	Name    string `json:"name"`
 	VPNFile string `json:"vpnFile"`
 	Whonix  bool   `json:"whonix"`
+	Lab     bool   `json:"lab"` // vpnFile is an HTB/THM lab .ovpn
 }
 
 // createOptions validates a create/recreate request into pentest.sh options.
@@ -96,7 +97,13 @@ func (req routeRequest) createOptions(name string) (ContainerCreateOptions, erro
 	if !containerNameRe.MatchString(name) {
 		return ContainerCreateOptions{}, fmt.Errorf("invalid container name %q (letters, digits, . _ -)", name)
 	}
-	opts := ContainerCreateOptions{Name: name, Whonix: req.Whonix}
+	opts := ContainerCreateOptions{Name: name, Whonix: req.Whonix, Lab: req.Lab}
+	if req.Lab && req.Whonix {
+		return opts, errors.New("a lab VPN cannot be combined with Tor")
+	}
+	if req.Lab && strings.TrimSpace(req.VPNFile) == "" {
+		return opts, errors.New("pick the lab .ovpn file")
+	}
 	if vpn := strings.TrimSpace(req.VPNFile); vpn != "" {
 		vpn, err := filepath.Abs(expandHome(vpn))
 		if err != nil {

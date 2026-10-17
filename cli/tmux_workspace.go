@@ -60,14 +60,15 @@ func newWorkspaceWindow(name, command string) (string, error) {
 // styleWorkspaceStatus colours the workspace session's status line by the active
 // window's network route (the @pomdock_route window option set on each container
 // shell), matching the pane-border colours: green vpn, red direct, magenta tor,
-// cyan tor-vpn. Windows without a route (dashboard, VM shells) keep the default.
+// cyan tor-vpn, yellow lab. Windows without a route (dashboard, VM shells) keep the default.
 // Scoped to the pomdock session, so the user's other tmux sessions are untouched.
 func styleWorkspaceStatus() {
 	route := "#{@pomdock_route}"
 	bg := "bg=#{?#{==:" + route + ",vpn},green," +
 		"#{?#{==:" + route + ",direct},red," +
 		"#{?#{==:" + route + ",tor},magenta," +
-		"#{?#{==:" + route + ",tor-vpn},cyan,default}}}}"
+		"#{?#{==:" + route + ",tor-vpn},cyan," +
+		"#{?#{==:" + route + ",lab},yellow,default}}}}}"
 	fg := "fg=#{?#{==:" + route + ",},default,black}"
 	_ = exec.Command("tmux", "set-option", "-t", workspaceSession, "status-style", bg+","+fg).Run()
 }

@@ -55,13 +55,13 @@ export const api = {
     request<{ hits: LogHit[] }>('GET', `/api/logsearch?${q(name)}&q=${encodeURIComponent(query)}`).then((d) => d.hits),
 
   containers: () => request<{ containers: ContainerInfo[] }>('GET', '/api/containers').then((d) => d.containers),
-  createContainer: (name: string, vpnFile: string, whonix: boolean) =>
-    request<Job>('POST', '/api/containers', { name, vpnFile, whonix }),
+  createContainer: (name: string, vpnFile: string, whonix: boolean, lab: boolean) =>
+    request<Job>('POST', '/api/containers', { name, vpnFile, whonix, lab }),
   startContainer: (name: string) => request<Job>('POST', `/api/containers/${encodeURIComponent(name)}/start`),
   stopContainer: (name: string) => request<Job>('POST', `/api/containers/${encodeURIComponent(name)}/stop`),
   removeContainer: (name: string) => request<Job>('DELETE', `/api/containers/${encodeURIComponent(name)}`),
-  recreateContainer: (name: string, vpnFile: string, whonix: boolean) =>
-    request<Job>('POST', `/api/containers/${encodeURIComponent(name)}/recreate`, { vpnFile, whonix }),
+  recreateContainer: (name: string, vpnFile: string, whonix: boolean, lab: boolean) =>
+    request<Job>('POST', `/api/containers/${encodeURIComponent(name)}/recreate`, { vpnFile, whonix, lab }),
   openShell: (name: string) => request<ShellOpened>('POST', `/api/containers/${encodeURIComponent(name)}/shell`),
   check: (name: string, tool: 'identity' | 'ports' | 'tor') =>
     request<{ output: string; error?: string }>('POST', `/api/containers/${encodeURIComponent(name)}/check/${tool}`),

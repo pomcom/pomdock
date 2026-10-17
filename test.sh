@@ -71,7 +71,7 @@ section "── Apt tools ──────────────────
 for bin in nmap ncat masscan whatweb sqlmap nikto wfuzz \
            wireshark tcpdump curl wget whois \
            smbclient crackmapexec enum4linux-ng \
-           netexec hydra john hashcat; do
+           netexec hydra john hashcat openvpn xfreerdp3; do
     if has "$bin"; then
         pass "$bin  ($(command -v "$bin"))"
     else
@@ -108,7 +108,7 @@ done
 
 section "── Shell environment ────────────────────────────"
 
-for bin in zsh tmux git fzf nvim script pomdock-shell pomsession pdsession pomhelp; do
+for bin in zsh tmux git fzf nvim script pomdock-shell pomsession pdsession pomhelp pomrdp; do
     if has "$bin"; then
         pass "$bin  ($(command -v "$bin"))"
     else

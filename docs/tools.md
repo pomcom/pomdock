@@ -30,6 +30,9 @@ metasploit-framework, hydra, ncrack, hashcat, john
 **Network & MITM**
 wireshark-common, tcpdump, netcat-traditional, bettercap, dnsutils, traceroute, net-tools
 
+**Lab VPN & RDP**
+openvpn (for `--lab`), freerdp3-x11 (`xfreerdp3`, wrapped by `pomrdp`)
+
 **Screenshots & OOB**
 gowitness, interactsh-client
 

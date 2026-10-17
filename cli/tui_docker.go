@@ -20,14 +20,16 @@ const (
 	routeVPN
 	routeTor
 	routeTorVPN
+	routeLab
+	routeCount
 )
 
 func (r containerRoute) String() string {
-	return [...]string{"direct", "VPN", "Tor", "Tor + VPN"}[r]
+	return [...]string{"direct", "VPN", "Tor", "Tor + VPN", "Lab"}[r]
 }
 
 func (r containerRoute) needsVPN() bool {
-	return r == routeVPN || r == routeTorVPN
+	return r == routeVPN || r == routeTorVPN || r == routeLab
 }
 
 func (r containerRoute) usesTor() bool {
@@ -130,13 +132,13 @@ func (m *tuiModel) updateContainerCreateForm(msg tea.KeyMsg) []tea.Cmd {
 		return []tea.Cmd{m.focusCreateField()}
 	case "left", "h":
 		if m.createForm.field == createRoute {
-			m.createForm.route = (m.createForm.route + 3) % 4
+			m.createForm.route = (m.createForm.route + routeCount - 1) % routeCount
 			m.createForm.err = ""
 			return nil
 		}
 	case "right", "l":
 		if m.createForm.field == createRoute {
-			m.createForm.route = (m.createForm.route + 1) % 4
+			m.createForm.route = (m.createForm.route + 1) % routeCount
 			m.createForm.err = ""
 			return nil
 		}
@@ -182,7 +184,7 @@ func (m *tuiModel) createFormOptions() (ContainerCreateOptions, error) {
 			return ContainerCreateOptions{}, fmt.Errorf("container '%s' already exists", name)
 		}
 	}
-	opts := ContainerCreateOptions{Name: name, Whonix: m.createForm.route.usesTor()}
+	opts := ContainerCreateOptions{Name: name, Whonix: m.createForm.route.usesTor(), Lab: m.createForm.route == routeLab}
 	if m.createForm.route.needsVPN() {
 		vpnFile := expandHome(strings.TrimSpace(m.createForm.vpnFile.Value()))
 		info, err := os.Stat(vpnFile)
@@ -327,8 +329,8 @@ func (m tuiModel) containerCreateFormView() string {
 		}
 		return " "
 	}
-	routes := make([]string, 4)
-	for route := routeDirect; route <= routeTorVPN; route++ {
+	routes := make([]string, routeCount)
+	for route := routeDirect; route < routeCount; route++ {
 		label := route.String()
 		if m.width < 72 && route == routeTorVPN {
 			label = "Tor+VPN"
@@ -339,6 +341,8 @@ func (m tuiModel) containerCreateFormView() string {
 		}
 		if m.createForm.route == route {
 			routes[route] = styleAccent.Copy().Bold(true).Render("[" + padding + label + padding + "]")
+		} else if m.width < 60 {
+			routes[route] = styleMuted.Render(label)
 		} else {
 			routes[route] = styleMuted.Render(" " + label + " ")
 		}
@@ -351,7 +355,11 @@ func (m tuiModel) containerCreateFormView() string {
 		fmt.Sprintf("  %s  %-9s %s", marker(createRoute), "Route", strings.Join(routes, " ")),
 	}
 	if m.createForm.route.needsVPN() {
-		lines = append(lines, fmt.Sprintf("  %s  %-9s %s", marker(createVPNFile), "VPN file", vpnFile.View()))
+		label := "VPN file"
+		if m.createForm.route == routeLab {
+			label = "Lab .ovpn"
+		}
+		lines = append(lines, fmt.Sprintf("  %s  %-9s %s", marker(createVPNFile), label, vpnFile.View()))
 	}
 	if m.createForm.err != "" {
 		for _, line := range wrapWords(m.createForm.err, m.width-4) {

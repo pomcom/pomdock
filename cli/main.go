@@ -202,7 +202,7 @@ func dockerBuild() *cobra.Command {
 // ── docker exec ───────────────────────────────────────────────────────────────
 
 func dockerExec() *cobra.Command {
-	var vpnFile, name string
+	var vpnFile, labFile, name string
 	var whonix bool
 	cmd := &cobra.Command{
 		Use:   "exec",
@@ -218,12 +218,18 @@ func dockerExec() *cobra.Command {
 			if whonix {
 				args = append(args, "--whonix")
 			}
+			if labFile != "" {
+				args = append(args, "--lab", labFile)
+			}
 			args = append(args, "exec")
 			return pentest(args...)
 		},
 	}
 	cmd.Flags().StringVar(&vpnFile, "vpn", "", "VPN config file (.conf or .ovpn)")
 	cmd.Flags().BoolVar(&whonix, "whonix", false, "Route through Tor")
+	cmd.Flags().StringVar(&labFile, "lab", "", "HTB/THM lab VPN (.ovpn): OpenVPN inside the container, internet stays direct")
+	cmd.MarkFlagsMutuallyExclusive("lab", "vpn")
+	cmd.MarkFlagsMutuallyExclusive("lab", "whonix")
 	cmd.Flags().StringVar(&name, "name", "", "Named engagement")
 	return cmd
 }

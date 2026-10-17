@@ -45,7 +45,7 @@ export type LogHit = {
   inOutput: boolean;
 };
 
-export type Route = 'vpn' | 'direct' | 'tor' | 'tor-vpn' | '';
+export type Route = 'vpn' | 'direct' | 'tor' | 'tor-vpn' | 'lab' | '';
 
 export type ContainerInfo = {
   name: string;

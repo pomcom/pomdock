@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# pomrdp: RDP into a lab Windows host from inside a pomdock container. The window
+# opens on the host desktop over X11, the traffic leaves through the container's
+# network (so through the lab VPN), and the loot dir is shared as drive "loot".
+
+set -euo pipefail
+
+usage() {
+    cat <<'USAGE'
+Usage: pomrdp [-u USER] [-p PASSWORD | -H NTHASH] [-d DOMAIN] HOST[:PORT] [-- FREERDP_ARGS...]
+
+  -u USER       login user (default: Administrator)
+  -p PASSWORD   password; omit both -p and -H to be prompted
+  -H NTHASH     pass-the-hash (needs Restricted Admin mode on the target)
+  -d DOMAIN     domain
+  --            pass the remaining arguments to xfreerdp unchanged
+
+Inside the session, \\tsclient\loot is ~/pentest in the container.
+USAGE
+}
+
+user=Administrator
+pass=""
+hash=""
+domain=""
+while getopts ":u:p:H:d:h" opt; do
+    case "$opt" in
+        u) user="$OPTARG" ;;
+        p) pass="$OPTARG" ;;
+        H) hash="$OPTARG" ;;
+        d) domain="$OPTARG" ;;
+        h) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+host="${1:-}"
+[[ -n "$host" ]] || { usage >&2; exit 2; }
+shift
+[[ "${1:-}" == "--" ]] && shift
+
+if [[ -z "${DISPLAY:-}" ]]; then
+    echo "pomrdp: no X11 display; recreate the container from a desktop session so DISPLAY is forwarded" >&2
+    exit 1
+fi
+
+client=""
+for c in xfreerdp3 xfreerdp; do
+    command -v "$c" >/dev/null 2>&1 && { client="$c"; break; }
+done
+[[ -n "$client" ]] || { echo "pomrdp: xfreerdp not installed; run pomdock docker build" >&2; exit 1; }
+
+args=(
+    "/v:$host" "/u:$user"
+    /cert:ignore /dynamic-resolution +clipboard
+    "/drive:loot,$HOME/pentest"
+)
+[[ -n "$domain" ]] && args+=("/d:$domain")
+if [[ -n "$hash" ]]; then
+    args+=("/pth:$hash")
+elif [[ -n "$pass" ]]; then
+    args+=("/p:$pass")
+fi
+
+exec "$client" "${args[@]}" "$@"

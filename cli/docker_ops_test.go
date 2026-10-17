@@ -57,6 +57,17 @@ func TestCreateOptionsFromLabels(t *testing.T) {
 	}
 }
 
+func TestCreateOptionsFromLabelsLab(t *testing.T) {
+	opts, ok := createOptionsFromLabelMap("thm", map[string]string{
+		"io.pomdock.role":     "pentest",
+		"io.pomdock.route":    "lab",
+		"io.pomdock.vpn-file": "/home/user/thm.ovpn",
+	})
+	if !ok || !opts.Lab || opts.Whonix || opts.VPNFile != "/home/user/thm.ovpn" {
+		t.Fatalf("unexpected lab options: ok=%v opts=%#v", ok, opts)
+	}
+}
+
 func TestCreateOptionsMigratesOriginalDefaultContainer(t *testing.T) {
 	opts, ok := createOptionsFromLabelMap("pcm-pentest", map[string]string{})
 	if !ok || opts.Name != "pcm-pentest" || opts.VPNFile != "" || opts.Whonix {
