@@ -49,7 +49,7 @@ go out directly. There is no kill switch; a lab VPN is not for anonymity.
 
 OpenVPN starts with the container and again on every start, and `exec` restarts it if
 it died. `exec`/`start` print your lab IP (`tun0`), the one to use for reverse shells
-and listeners. Log: `docker exec NAME cat /tmp/lab-openvpn.log`.
+and listeners. Log: `docker exec -u root NAME cat /tmp/lab-openvpn.log`.
 
 ### RDP and browsing in the lab
 
