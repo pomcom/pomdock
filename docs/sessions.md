@@ -35,10 +35,31 @@ keeps one token across restarts (created 0600 if missing). Tabs:
 
 - **Tracker**: the engagement's Atuin history as team-report rows, copyable as TSV.
   Curation is saved to `<loot>/.pomdock/tracker.json`.
-- **Sessions**: recorded captures and imported logs, searchable across commands and
+- **Session history**: recorded captures and imported logs, searchable across commands and
   output.
 - **Containers**: create, start, stop, recreate, and remove pentest containers.
-- **Shells**: open recorded container shells in the pomdock tmux workspace.
+- **Terminals**: existing shell windows in the pomdock tmux workspace. Open a new
+  container terminal from Containers; its recording appears in Session history.
+
+The navigation and recording list collapse independently. Drag the list divider
+(or focus it and use arrow keys, Home, or End) to resize it between 260–300px.
+Layout settings and session display names use local pomdock preferences. Rename
+changes the display name only; the recording ID and captured history stay intact.
+
+Filter recordings by name, date, or tag. Search explicitly targets the current
+session or all non-archived recordings in the selected engagement. Enter and
+Shift+Enter navigate matches. Histories render 100 executions per page; search
+jumps to the page containing its match. Collapsed output previews never truncate
+what the copy button copies. Recording IDs, archive, restore, and encryption
+actions are available under Details; archive/encrypt affects the entire capture,
+including its tagged sections.
+
+**Open capture** means no end marker was recorded, including captures interrupted
+without a clean shutdown. It does not prove the terminal is live. Open captures
+refresh every three seconds while the page is visible. Scrolling back pauses
+following; **Follow output** resumes at the latest execution. Completed segments
+and captures show **Ended**. Container identity, command exit status, and duration
+are unavailable in the existing transcript format and are not inferred.
 
 ## How reading a recording works
 

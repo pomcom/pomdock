@@ -11,6 +11,7 @@
 
   $effect(() => {
     let stopped = false;
+    let notified = false; // ondone fires at most once, even across re-polls
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       try {
@@ -20,7 +21,10 @@
         job = j;
         if (follow) queueMicrotask(() => pre && (pre.scrollTop = pre.scrollHeight));
         if (j.status === 'running') timer = setTimeout(tick, 800);
-        else ondone?.(j);
+        else if (!notified) {
+          notified = true;
+          ondone?.(j);
+        }
       } catch (e) {
         error = (e as Error).message;
       }

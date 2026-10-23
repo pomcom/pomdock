@@ -133,7 +133,7 @@
           <span class="muted">inside tmux:</span>
           <code>{shellInfo.switch}</code><CopyButton text={shellInfo.switch} />
         </div>
-        <button class="sm ghost close" onclick={() => (shellInfo = null)}>✕</button>
+        <button class="sm ghost close" title="Dismiss terminal information" aria-label="Dismiss terminal information" onclick={() => (shellInfo = null)}>✕</button>
       </div>
     {/if}
 
@@ -150,6 +150,7 @@
           <div class="top">
             <span class="dot" class:on={running} title={c.state}></span>
             <span class="name">{c.name}</span>
+            <span class="muted">{c.state}</span>
             <RouteBadge route={c.route} />
             {#if c.hasVpn}<span class="badge">vpn sidecar up</span>{/if}
             {#if c.hasTor}<span class="badge">tor sidecar up</span>{/if}
@@ -164,22 +165,23 @@
           </div>
           <div class="actions">
             {#if running}
-              <button class="sm accent" disabled={!!c.job} onclick={() => openShell(c)}>{c.shell ? 'Show shell' : 'Open shell'}</button>
+              <button class="sm accent" disabled={!!c.job} onclick={() => openShell(c)}>{c.shell ? 'Show terminal' : 'Open terminal'}</button>
               <button class="sm" disabled={!!c.job} onclick={() => run(api.stopContainer(c.name))}>Stop</button>
             {:else}
               <button class="sm accent" disabled={!!c.job} onclick={() => run(api.startContainer(c.name))}>Start</button>
             {/if}
             <button class="sm" disabled={!!c.job} onclick={() => editForm(c)}>Change route…</button>
-            <button class="sm danger" disabled={!!c.job} onclick={() => (confirmRemove = c)}>Remove…</button>
             <span class="sep"></span>
             <button class="sm ghost" onclick={() => openEngagement(c, 'tracker')}>Tracker</button>
-            <button class="sm ghost" onclick={() => openEngagement(c, 'sessions')}>Sessions</button>
+            <button class="sm ghost" onclick={() => openEngagement(c, 'sessions')}>Session history</button>
             {#if running}
               <span class="sep"></span>
               <button class="sm ghost" onclick={() => check(c, 'identity')}>Egress</button>
               <button class="sm ghost" onclick={() => check(c, 'tor')}>Tor check</button>
               <button class="sm ghost" onclick={() => check(c, 'ports')}>Ports</button>
             {/if}
+            <span class="grow"></span>
+            <button class="sm ghost danger" disabled={!!c.job} onclick={() => (confirmRemove = c)}>Remove…</button>
           </div>
           {#if checks[c.name]}
             {@const ck = checks[c.name]}
@@ -187,7 +189,7 @@
               <div class="checkhead">
                 <span>{ck.tool}</span>
                 <span class="grow"></span>
-                <button class="sm ghost" onclick={() => delete checks[c.name]}>✕</button>
+                <button class="sm ghost" title="Close check output" aria-label="Close check output" onclick={() => delete checks[c.name]}>✕</button>
               </div>
               <pre class="log">{ck.busy ? 'running…' : ck.output || '(no output)'}</pre>
               {#if ck.error}<div class="err">{ck.error}</div>{/if}
@@ -275,15 +277,15 @@
   .muted { color: var(--overlay); font-size: 11px; }
   .notice {
     position: relative; background: color-mix(in srgb, var(--accent) 12%, var(--mantle)); border: 1px solid var(--accent);
-    border-radius: 11px; padding: 12px 40px 12px 14px; margin-bottom: 14px; display: grid; gap: 8px;
+    border-radius: 5px; padding: 12px 40px 12px 14px; margin-bottom: 14px; display: grid; gap: 8px;
   }
   .notice .close { position: absolute; top: 8px; right: 8px; }
   .cmds { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .cards { display: grid; gap: 12px; }
-  .card { background: var(--mantle); border: 1px solid var(--surface1); border-radius: 12px; padding: 12px 14px; }
+  .cards { display: grid; }
+  .card { background: transparent; border-bottom: 1px solid var(--surface1); padding: 16px 0; }
   .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
-  .dot.on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); }
+  .dot.on { background: var(--green); }
   .name { font-weight: 650; font-size: 14px; font-family: var(--mono); }
   .busy { background: color-mix(in srgb, var(--yellow) 25%, transparent); color: var(--yellow); }
   .sub { display: flex; gap: 14px; flex-wrap: wrap; color: var(--overlay); font-size: 11px; margin: 4px 0 10px 17px; font-family: var(--mono); }
@@ -294,7 +296,7 @@
   .err { color: var(--red); font-size: 12px; margin-top: 6px; font-family: var(--mono); white-space: pre-wrap; }
   h3 { font-size: 11px; color: var(--overlay); text-transform: uppercase; letter-spacing: .6px; margin: 26px 0 8px; }
   .jobs { display: grid; gap: 6px; }
-  .job { background: var(--mantle); border: 1px solid var(--surface0); border-radius: 10px; padding: 6px 8px; }
+  .job { background: var(--mantle); border-bottom: 1px solid var(--surface1); border-radius: 4px; padding: 6px 8px; }
   .jobhead { display: flex; gap: 10px; align-items: center; width: 100%; border: none; background: none; text-align: left; padding: 4px; }
   .job :global(pre.log) { margin-top: 6px; }
   .status-running { background: color-mix(in srgb, var(--yellow) 25%, transparent); color: var(--yellow); }
@@ -307,7 +309,7 @@
   .warn { color: var(--subtext); font-size: 12px; margin: 0 0 12px; }
   .routes { display: grid; gap: 6px; margin: 12px 0; }
   .routeopt {
-    display: flex; gap: 8px; align-items: center; border: 1px solid var(--surface1); border-radius: 9px;
+    display: flex; gap: 8px; align-items: center; border: 1px solid var(--surface1); border-radius: 5px;
     padding: 8px 10px; cursor: pointer; color: var(--text);
   }
   .routeopt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }

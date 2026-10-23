@@ -28,6 +28,9 @@ export type Session = {
   tag: string;
   date: string;
   created: number;
+  state?: 'open' | 'ended' | 'imported';
+  ended?: number;
+  container?: string;
   entries?: SessionEntry[];
 };
 
@@ -83,5 +86,8 @@ export type Prefs = {
   tester?: string;
   withHeader?: boolean;
   sessAsideCollapsed?: boolean;
+  sessAsideWidth?: number;
+  navCollapsed?: boolean;
+  sessionNames?: Record<string, string>;
   engagement?: string;
 };

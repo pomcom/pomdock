@@ -23,6 +23,8 @@ type Session struct {
 	Tag        string         `json:"tag"`  // user label from `pdsession <tag>`, "" if none
 	Date       string         `json:"date"` // YYYY-MM-DD
 	Created    int64          `json:"created"`
+	State      string         `json:"state,omitempty"` // open (no end marker), ended, imported
+	Ended      int64          `json:"ended,omitempty"`
 	Entries    []SessionEntry `json:"entries"`
 }
 
@@ -82,20 +84,25 @@ func parsePastedLog(text string) []SessionEntry {
 	}
 	var out []SessionEntry
 	for k, i := range cmdIdx {
-		cmd := strings.TrimSpace(strings.TrimLeft(lines[i], " ")[len(promptMarker):])
-		if cmd == "" {
+		cmd := strings.TrimLeft(lines[i], " ")[len(promptMarker):]
+		if strings.TrimSpace(cmd) == "" {
 			continue
 		}
 		end := len(lines)
 		if k+1 < len(cmdIdx) {
-			end = cmdIdx[k+1] - 1 // drop the next block's header line
+			end = cmdIdx[k+1] // the next prompt may have no header at all
 		}
-		body := append([]string{}, lines[i+1:max(i+1, end)]...)
-		// Drop leading ZLE redraw ghosts: when a command is *pasted*, zsh erases
-		// and re-renders it one row up, which — with vertical moves flattened —
-		// leaves a gappy echo of the command as the first "output" line (e.g.
-		// "  python3            \"$WS/machine\""). Strip those and any blanks.
-		for len(body) > 0 && (strings.TrimSpace(body[0]) == "" || isRedrawGhost(cmd, body[0])) {
+		// A command typed with trailing backslashes spans several rows; fold the
+		// continuation rows into the command instead of mistaking them for output.
+		cmdLast := i
+		for hasLineContinuation(lines[cmdLast]) && cmdLast+1 < end {
+			cmdLast++
+			cmd += "\n" + lines[cmdLast]
+		}
+		body := append([]string{}, lines[cmdLast+1:max(cmdLast+1, end)]...)
+		// Do not guess whether output resembling the command is a redraw: tools
+		// may legitimately echo their input. Terminal escapes are handled by cleanLog.
+		for len(body) > 0 && strings.TrimSpace(body[0]) == "" {
 			body = body[1:]
 		}
 		// trim trailing blanks and a dangling header line
@@ -114,6 +121,16 @@ func parsePastedLog(text string) []SessionEntry {
 		})
 	}
 	return out
+}
+
+// Only an odd number of trailing backslashes escapes the newline. A literal
+// double backslash must not absorb the first output row into the command.
+func hasLineContinuation(line string) bool {
+	n := 0
+	for i := len(line) - 1; i >= 0 && line[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // isRedrawGhost reports whether line is a leftover ZLE redraw of cmd rather than
@@ -260,6 +277,27 @@ func sessionFiles(engagement string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return captureFilesIn(dir)
+}
+
+// archiveSubdir is the hidden directory under an engagement's sessions dir that
+// holds archived captures. captureFilesIn (and so sessionFiles) ignores
+// subdirectories, so moving a capture here removes it from the live Sessions
+// list while keeping it fully readable from the Archived view.
+const archiveSubdir = ".archive"
+
+// archivedFiles returns the capture files in an engagement's archive subdir.
+func archivedFiles(engagement string) ([]string, error) {
+	dir, err := sessionsDir(engagement)
+	if err != nil {
+		return nil, err
+	}
+	return captureFilesIn(filepath.Join(dir, archiveSubdir))
+}
+
+// captureFilesIn lists the imported .json and raw .log captures directly in dir
+// (timing files and subdirectories ignored). A missing dir is not an error.
+func captureFilesIn(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -332,6 +370,9 @@ func parseSessionFile(path, engagement string) ([]*Session, error) {
 		if err != nil {
 			return nil, err
 		}
+		if s.State == "" {
+			s.State = "imported"
+		}
 		return []*Session{s}, nil
 	}
 	return loadCaptureLog(path, engagement)
@@ -342,6 +383,21 @@ func listSessions(engagement string) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	return sessionsFromFiles(engagement, files), nil
+}
+
+// listArchivedSessions lists the sessions in an engagement's archive subdir.
+func listArchivedSessions(engagement string) ([]Session, error) {
+	files, err := archivedFiles(engagement)
+	if err != nil {
+		return nil, err
+	}
+	return sessionsFromFiles(engagement, files), nil
+}
+
+// sessionsFromFiles parses each capture file into its logical sessions (output
+// bodies dropped for the list view) and returns them newest-first.
+func sessionsFromFiles(engagement string, files []string) []Session {
 	out := []Session{}
 	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
@@ -360,7 +416,86 @@ func listSessions(engagement string) ([]Session, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out, nil
+	return out
+}
+
+// capturePathForID returns the capture file (among files) whose parsed sessions
+// include id.
+func capturePathForID(engagement, id string, files []string) (string, error) {
+	for _, f := range files {
+		sessions, err := loadSessions(f, engagement)
+		if err != nil {
+			continue
+		}
+		for _, s := range sessions {
+			if s.ID == id {
+				return f, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("session %q not found", id)
+}
+
+// archiveSession moves the capture holding id (and the .timing sibling of a .log)
+// into the engagement's archive subdir, hiding it from the live Sessions list.
+func archiveSession(engagement, id string) error {
+	files, err := sessionFiles(engagement)
+	if err != nil {
+		return err
+	}
+	src, err := capturePathForID(engagement, id, files)
+	if err != nil {
+		return err
+	}
+	dir, err := sessionsDir(engagement)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(dir, archiveSubdir)
+	if err := os.MkdirAll(dest, 0o700); err != nil {
+		return err
+	}
+	return moveCapture(engagement, src, dest)
+}
+
+// unarchiveSession moves an archived capture back into the live sessions dir.
+func unarchiveSession(engagement, id string) error {
+	files, err := archivedFiles(engagement)
+	if err != nil {
+		return err
+	}
+	src, err := capturePathForID(engagement, id, files)
+	if err != nil {
+		return err
+	}
+	dir, err := sessionsDir(engagement)
+	if err != nil {
+		return err
+	}
+	return moveCapture(engagement, src, dir)
+}
+
+// moveCapture moves src (and the .timing sibling of a .log) into destDir and
+// drops the cache entry for the old path.
+func moveCapture(engagement, src, destDir string) error {
+	base := filepath.Base(src)
+	if err := os.Rename(src, filepath.Join(destDir, base)); err != nil {
+		return err
+	}
+	dropSessionCache(engagement, src)
+	if strings.HasSuffix(src, ".log") {
+		timing := strings.TrimSuffix(src, ".log") + ".timing"
+		if _, err := os.Stat(timing); err == nil {
+			_ = os.Rename(timing, filepath.Join(destDir, strings.TrimSuffix(base, ".log")+".timing"))
+		}
+	}
+	return nil
+}
+
+func dropSessionCache(engagement, path string) {
+	sessionCache.Lock()
+	delete(sessionCache.m, engagement+"\x00"+path)
+	sessionCache.Unlock()
 }
 
 // --- raw `script` capture logs -------------------------------------------------
@@ -433,6 +568,15 @@ func renderLine(line string) string {
 		case c == '\t': // advance to the next 8-column tab stop without erasing
 			col = (col/8 + 1) * 8
 		case c == 0x1b:
+			// A cursor-UP move on a physical line means zsh is re-drawing the rows
+			// ABOVE this one — the syntax-highlight re-render of a multi-line
+			// command. A per-line model can't place those rows and would collapse
+			// them into this one as garbage, so stop here and keep what the row
+			// already showed (the clean first pass is preserved as its own lines).
+			if cursorMovesUp(rs[i:]) {
+				i = len(rs)
+				break
+			}
 			i += escLen(rs[i:], &buf, &col)
 		case c < 0x20: // other C0 controls: drop
 		default:
@@ -444,6 +588,30 @@ func renderLine(line string) string {
 		buf = buf[:len(buf)-1]
 	}
 	return string(buf)
+}
+
+// cursorMovesUp reports whether the escape at rs[0] (ESC) is a CSI that moves the
+// cursor to an earlier row: cursor-up (A) or cursor-previous-line (F). These mark
+// the start of a redraw of rows already emitted.
+func cursorMovesUp(rs []rune) bool {
+	if len(rs) < 3 || rs[1] != '[' {
+		return false
+	}
+	j := 2
+	for j < len(rs) && rs[j] >= 0x30 && rs[j] <= 0x3f { // parameter bytes
+		j++
+	}
+	params := string(rs[2:j])
+	for j < len(rs) && rs[j] >= 0x20 && rs[j] <= 0x2f { // intermediates
+		j++
+	}
+	if j >= len(rs) {
+		return false
+	}
+	if params != "" && strings.ContainsRune("<=>?", rune(params[0])) {
+		return false // private sequence: not a cursor move
+	}
+	return rs[j] == 'A' || rs[j] == 'F'
 }
 
 // escLen consumes an escape sequence beginning at rs[0] (which is ESC), applying
@@ -588,6 +756,20 @@ type logSegment struct {
 // first line, e.g. "Script started on 2026-09-14 19:07:03+02:00 [...]".
 var scriptStartHeaderRe = regexp.MustCompile(`^Script started on (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})`)
 
+var scriptEndHeaderRe = regexp.MustCompile(`(?m)^Script done on (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})`)
+
+func captureEnd(raw string) (string, int64) {
+	if m := scriptEndHeaderRe.FindStringSubmatch(raw); m != nil {
+		if t, err := time.Parse("2006-01-02 15:04:05-07:00", m[1]); err == nil {
+			return "ended", t.Unix()
+		}
+	}
+	if strings.Contains(raw, "\nScript done on ") {
+		return "ended", 0
+	}
+	return "open", 0 // unclosed, including interrupted captures; not proof of liveness
+}
+
 // scriptStartNS returns the capture's start time in ns since epoch, or 0.
 func scriptStartNS(raw string) int64 {
 	m := scriptStartHeaderRe.FindStringSubmatch(raw)
@@ -607,12 +789,16 @@ func loadCaptureLog(path, engagement string) ([]*Session, error) {
 		return nil, err
 	}
 	startNS := scriptStartNS(string(raw))
+	state, ended := captureEnd(string(raw))
 	clean := cleanLog(string(raw))
 	stem := strings.TrimSuffix(filepath.Base(path), ".log")
 	info, _ := os.Stat(path)
 	fileCreated := time.Now().Unix()
 	if info != nil {
 		fileCreated = info.ModTime().Unix()
+	}
+	if startNS > 0 {
+		fileCreated = startNS / int64(time.Second)
 	}
 
 	segments := splitSessions(clean)
@@ -654,9 +840,13 @@ func loadCaptureLog(path, engagement string) ([]*Session, error) {
 		if seg.tag != "" {
 			title = seg.tag
 		}
+		segmentState, segmentEnd := state, ended
+		if idx+1 < len(segments) && segments[idx+1].epoch > 0 {
+			segmentState, segmentEnd = "ended", segments[idx+1].epoch
+		}
 		out = append(out, &Session{
 			ID: id, Engagement: engagement, Source: "script", Tag: seg.tag,
-			Title: title, Date: date, Created: created, Entries: entries,
+			Title: title, Date: date, Created: created, State: segmentState, Ended: segmentEnd, Entries: entries,
 		})
 	}
 	if len(out) == 0 {
@@ -664,7 +854,7 @@ func loadCaptureLog(path, engagement string) ([]*Session, error) {
 			ID: stem, Engagement: engagement, Source: "script",
 			Title:   "Recorded session " + stem,
 			Date:    time.Unix(fileCreated, 0).In(berlinLoc).Format("2006-01-02"),
-			Created: fileCreated, Entries: []SessionEntry{{Command: "(empty capture)"}},
+			Created: fileCreated, State: state, Ended: ended, Entries: []SessionEntry{},
 		})
 	}
 	return out, nil
@@ -712,6 +902,19 @@ func getSession(engagement, id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	return sessionByID(engagement, id, files)
+}
+
+// getArchivedSession loads one session from the engagement's archive subdir.
+func getArchivedSession(engagement, id string) (*Session, error) {
+	files, err := archivedFiles(engagement)
+	if err != nil {
+		return nil, err
+	}
+	return sessionByID(engagement, id, files)
+}
+
+func sessionByID(engagement, id string, files []string) (*Session, error) {
 	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
 		if err != nil {

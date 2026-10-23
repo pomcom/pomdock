@@ -33,7 +33,7 @@
   {/each}
   <div class="rule">
     <!-- svelte-ignore a11y_autofocus -->
-    <input class="pat" bind:value={draft} autofocus placeholder="e.g. ifconfig.me  or  /^curl/"
+    <input class="pat" aria-label="New noise rule" bind:value={draft} autofocus placeholder="e.g. ifconfig.me  or  /^curl/"
       onkeydown={(e) => e.key === 'Enter' && add()} />
     <button class="sm accent" onclick={add}>add</button>
   </div>

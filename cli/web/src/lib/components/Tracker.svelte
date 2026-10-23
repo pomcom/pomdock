@@ -3,7 +3,7 @@
   import { api } from '../api';
   import { app, copyText, setPref, toast } from '../app.svelte';
   import {
-    activeColumns, buildItems, mergeItems, noiseMatcher, rowItem, ruleFor, serialize, toTSV,
+    activeColumns, buildItems, fuzzyScore, mergeItems, noiseMatcher, rowItem, ruleFor, serialize, toTSV,
     type Defaults, type Fields, type Item, type SavedState,
   } from '../tracker';
   import type { ReportRow } from '../types';
@@ -105,12 +105,17 @@
   const isNoise = (it: Item) => it.noise || isRuleNoise(it.command);
 
   const visible = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    return items
+    const q = query.trim();
+    const base = items
       .filter((it) => !it.deleted)
-      .filter((it) => showNoise || it.incl || !isNoise(it))
-      .filter((it) => !q || `${it.command} ${it.measure} ${it.targets}`.toLowerCase().includes(q))
-      .sort((a, b) => a.ts - b.ts);
+      .filter((it) => showNoise || it.incl || !isNoise(it));
+    if (!q) return base.sort((a, b) => a.ts - b.ts);
+    // Fuzzy (fzf-style) match over command + measure + targets, best first.
+    return base
+      .map((it) => ({ it, score: fuzzyScore(`${it.command} ${it.measure} ${it.targets}`, q) }))
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score || a.it.ts - b.it.ts)
+      .map((x) => x.it);
   });
   const checked = $derived(items.filter((it) => it.incl && !it.deleted));
   const numbers = $derived(new Map([...checked].sort((a, b) => a.ts - b.ts).map((it, i) => [it.key, i + 1])));
@@ -211,6 +216,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     const el = document.activeElement;
+    if (e.ctrlKey || e.metaKey || e.altKey || (el instanceof HTMLElement && (el.isContentEditable || el.closest('[role=dialog], .xterm, [data-terminal]')))) return;
     if (e.key === '/' && !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
       e.preventDefault();
       searchEl?.focus();
@@ -237,7 +243,7 @@
 <div class="tracker">
   <div class="bar">
     <div class="search">
-      <input bind:this={searchEl} bind:value={query} placeholder="Search command, measure, target…" />
+      <input bind:this={searchEl} aria-label="Search tracker commands, measures and targets" bind:value={query} placeholder="Fuzzy search command, measure, target…" />
       {#if query}<span class="hint">{visible.length} match</span>{:else}<span class="hint kbd">/</span>{/if}
     </div>
     <label><input type="checkbox" bind:checked={showNoise} /> show noise ({noiseCount})</label>
@@ -317,7 +323,7 @@
         <thead>
           <tr>
             <th class="chk">
-              <input type="checkbox" title="select all visible" checked={allVisibleChecked}
+              <input type="checkbox" title="Select all visible rows" aria-label="Select all visible rows" checked={allVisibleChecked}
                 onchange={(e) => { for (const it of visible) it.incl = e.currentTarget.checked; }} />
             </th>
             {#each cols as c (c.key)}<th>{c.short}</th>{/each}
@@ -327,7 +333,7 @@
         <tbody>
           {#each visible as it, idx (it.key)}
             <tr class="row" class:incl={it.incl} class:noise={isNoise(it)}>
-              <td class="chk"><input type="checkbox" checked={it.incl} onclick={(e) => toggleRow(idx, e.shiftKey)} /></td>
+              <td class="chk"><input type="checkbox" aria-label={`Select row ${idx + 1}`} checked={it.incl} onclick={(e) => toggleRow(idx, e.shiftKey)} /></td>
               {#each cols as c (c.key)}
                 {#if c.key === 'num'}
                   <td class="num" onclick={() => toggleRow(idx, false)}>{it.incl ? numbers.get(it.key) : ''}</td>
@@ -336,26 +342,26 @@
                 {:else if c.key === 'measure'}
                   <td class="measure">
                     <div class="mcell">
-                      <button class="chev" class:open={it.expanded} title="show full command" onclick={() => (it.expanded = !it.expanded)}>▶</button>
+                      <button class="chev" class:open={it.expanded} title="Expand or collapse command" aria-label="Expand or collapse command" aria-expanded={it.expanded} onclick={() => (it.expanded = !it.expanded)}>▶</button>
                       <button class="mtext" class:edited={it.measure !== it.origMeasure} title="click to expand / edit" onclick={() => (it.expanded = true)}>
                         {#if it.kind === 'merged'}<span class="badge">merged {it.ids.length}</span>{/if}
-                        <Highlight text={it.measure} q={query} />
+                        <Highlight text={it.measure} q={query} fuzzy />
                       </button>
                     </div>
                   </td>
                 {:else if c.key === 'ie'}
                   <td class="eint">
-                    <select class="cell" data-v={it.ie} bind:value={it.ie}>
+                    <select class="cell" aria-label={`Internal or external for row ${idx + 1}`} data-v={it.ie} bind:value={it.ie}>
                       <option value="">—</option><option>Internal</option><option>External</option>
                     </select>
                   </td>
                 {:else if c.key === 'targets' || c.key === 'comment'}
-                  <td class={c.key}><input class="cell" bind:value={it[c.key]} /></td>
+                  <td class={c.key}><input class="cell" aria-label={`${c.header} for row ${idx + 1}`} bind:value={it[c.key]} /></td>
                 {:else}
-                  <td class="editcol"><input class="cell" bind:value={it[c.key]} /></td>
+                  <td class="editcol"><input class="cell" aria-label={`${c.header} for row ${idx + 1}`} bind:value={it[c.key]} /></td>
                 {/if}
               {/each}
-              <td class="act"><button class="delx" title="delete row (atuin untouched)" onclick={() => deleteItems([it])}>✕</button></td>
+              <td class="act"><button class="delx" title="Delete report row (history preserved)" aria-label="Delete report row" onclick={() => deleteItems([it])}>✕</button></td>
             </tr>
             {#if it.expanded}
               <tr class="detail">
@@ -366,7 +372,7 @@
                         Full command
                         <span class="badge" class:ok={it.exit === 0} class:bad={it.exit !== 0}>exit {it.exit}</span>
                       </span>
-                      <div class="rawcmd"><span><Highlight text={it.command} q={query} /></span><CopyButton text={it.command} /></div>
+                      <div class="rawcmd"><span><Highlight text={it.command} q={query} fuzzy /></span><CopyButton text={it.command} /></div>
                       <div class="drow">
                         <button class="sm ghost" title="add this command as a noise rule" onclick={() => (noiseModal = ruleFor(it.command))}>＋ always noise</button>
                         {#if it.kind === 'merged'}<button class="sm ghost" onclick={() => unmerge(it)}>split merge</button>{/if}
@@ -404,19 +410,19 @@
   .scroll { flex: 1; overflow: auto; min-height: 0; }
   .bulk { background: var(--crust); padding: 9px 18px; }
   .search { position: relative; display: flex; align-items: center; }
-  .search input { width: 320px; max-width: 60vw; background: var(--base); border-radius: 9px; padding-right: 64px; }
+  .search input { width: 320px; max-width: 60vw; background: var(--base); border-radius: 5px; padding-right: 64px; }
   .hint { position: absolute; right: 9px; color: var(--overlay); font-size: 11px; }
   .kbd { color: var(--faint); font-size: 10px; border: 1px solid var(--surface1); border-radius: 4px; padding: 1px 5px; }
   .muted { color: var(--overlay); font-size: 11px; }
   .link { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; font-size: 11px; }
-  .pill { background: var(--surface0); border-radius: 20px; padding: 4px 13px; color: var(--subtext); font-size: 12px; }
+  .pill { background: var(--surface0); border-radius: 4px; padding: 4px 9px; color: var(--subtext); font-size: 12px; }
   .pill b { color: var(--green); font-variant-numeric: tabular-nums; }
   .save { font-size: 11px; color: var(--overlay); min-width: 56px; text-align: right; }
   .save-error { color: var(--red); font-weight: 600; }
   .count { color: var(--accent); font-variant-numeric: tabular-nums; }
   .group {
-    display: flex; gap: 6px; align-items: center; background: var(--base);
-    border: 1px solid var(--surface1); border-radius: 11px; padding: 5px 9px;
+    display: flex; gap: 6px; align-items: center;
+    padding: 3px 0; margin-right: 8px;
   }
   .glabel { color: var(--overlay); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; margin-right: 3px; }
   button.int { border-color: color-mix(in srgb, var(--int) 55%, var(--surface1)); }

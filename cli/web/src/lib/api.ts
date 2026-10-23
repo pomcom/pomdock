@@ -39,8 +39,18 @@ export const api = {
   prefs: () => request<Prefs | null>('GET', '/api/prefs'),
   savePrefs: (prefs: Prefs) => request<{ ok: boolean }>('PUT', '/api/prefs', prefs),
 
-  sessions: (name: string) => request<{ sessions: Session[] }>('GET', `/api/sessions?${q(name)}`).then((d) => d.sessions),
-  session: (name: string, id: string) => request<Session>('GET', `/api/session?${q(name)}&id=${encodeURIComponent(id)}`),
+  sessions: (name: string, archived = false) =>
+    request<{ sessions: Session[] }>('GET', `/api/sessions?${q(name)}${archived ? '&archived=1' : ''}`).then((d) => d.sessions),
+  session: (name: string, id: string, archived = false) =>
+    request<Session>('GET', `/api/session?${q(name)}&id=${encodeURIComponent(id)}${archived ? '&archived=1' : ''}`),
+  archiveSession: (name: string, id: string) =>
+    request<{ ok: boolean }>('POST', `/api/session/archive?${q(name)}&id=${encodeURIComponent(id)}`),
+  unarchiveSession: (name: string, id: string) =>
+    request<{ ok: boolean }>('POST', `/api/session/unarchive?${q(name)}&id=${encodeURIComponent(id)}`),
+  encryptSession: (name: string, id: string, passphrase: string) =>
+    request<{ ok: boolean; archive: string }>('POST', `/api/session/encrypt?${q(name)}&id=${encodeURIComponent(id)}`, { passphrase }),
+  encryptedArchives: (name: string) =>
+    request<{ archives: string[] }>('GET', `/api/session/encrypted?${q(name)}`).then((d) => d.archives),
   logSearch: (name: string, query: string) =>
     request<{ hits: LogHit[] }>('GET', `/api/logsearch?${q(name)}&q=${encodeURIComponent(query)}`).then((d) => d.hits),
 

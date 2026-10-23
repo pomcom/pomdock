@@ -189,3 +189,37 @@ func TestRenderLineEscapes(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMultilineBoundaries(t *testing.T) {
+	tests := []struct{ name, log, command, output string }{
+		{"curl continuation", "❯ curl \\\n  --silent \\\n  https://example.invalid\nresponse\n❯ whoami\nkali\n", "curl \\\n  --silent \\\n  https://example.invalid", "response"},
+		{"literal backslashes", "❯ printf '\\\\'\nvalue\n❯ whoami\nkali\n", "printf '\\\\'", "value"},
+		{"even trailing backslashes", "❯ echo " + strings.Repeat("\\", 2) + "\nvalue\n❯ whoami\nkali\n", "echo " + strings.Repeat("\\", 2), "value"},
+		{"whitespace after backslash", "❯ echo \\ \nvalue\n❯ whoami\nkali\n", "echo \\ ", "value"},
+		{"echoed input preserved", "❯ echo ok\n  ok\n❯ whoami\nkali\n", "echo ok", "  ok"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parsePastedLog(tt.log)
+			if len(got) != 2 || got[0].Command != tt.command || got[0].Output != tt.output || got[1].Output != "kali" {
+				t.Fatalf("entries = %#v; want first command %q, output %q and intact second entry", got, tt.command, tt.output)
+			}
+		})
+	}
+}
+
+func TestCaptureEnd(t *testing.T) {
+	for _, tt := range []struct {
+		raw, state string
+		end        int64
+	}{
+		{"Script started on 2026-10-01 10:00:00+00:00\n", "open", 0},
+		{"\nScript done on 2026-10-01 10:05:00+00:00 [COMMAND_EXIT_CODE=\"0\"]\n", "ended", time.Date(2026, 10, 1, 10, 5, 0, 0, time.UTC).Unix()},
+		{"\nScript done on an unsupported date format\n", "ended", 0},
+	} {
+		state, end := captureEnd(tt.raw)
+		if state != tt.state || end != tt.end {
+			t.Fatalf("captureEnd = %q, %d; want %q, %d", state, end, tt.state, tt.end)
+		}
+	}
+}
