@@ -20,6 +20,9 @@ mkdir -p -- "$session_dir"
 stamp="$(date -u +'%Y%m%dT%H%M%SZ')"
 stem="${stamp}-$$"
 export POMDOCK_CAPTURE_ACTIVE=1
+# Also set the variable the dotfiles zshrc's own fallback recorder guards on, so
+# it defers to this recorder instead of nesting a second script(1) inside it.
+export POMDOCK_CAPTURE="$stem"
 export POMDOCK_SESSION_LOG="${session_dir}/${stem}.log"
 
 exec script \

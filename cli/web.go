@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/spf13/cobra"
 )
 
@@ -58,8 +60,76 @@ func webCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not auto-open the browser")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "read the login token from this file (created mode 0600 if missing)")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeEngagements)
-	cmd.AddCommand(reportImportCmd())
+	cmd.AddCommand(reportImportCmd(), sessionRestoreCmd())
 	return cmd
+}
+
+// sessionRestoreCmd decrypts an encrypted session archive (made by the web UI's
+// Encrypt button) and restores its captures into the live sessions dir.
+func sessionRestoreCmd() *cobra.Command {
+	var into string
+	cmd := &cobra.Command{
+		Use:   "session-restore <file.tar.age>",
+		Short: "Decrypt an encrypted session archive and restore its captures",
+		Long: "Prompt for the passphrase, decrypt an age-encrypted session archive,\n" +
+			"and extract its capture files back into the engagement's sessions dir so\n" +
+			"the web UI lists them again. The passphrase is read from the terminal and\n" +
+			"never taken from arguments or the environment.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			archivePath := args[0]
+			if !fileExists(archivePath) {
+				return fmt.Errorf("archive not found: %s", archivePath)
+			}
+			dest := into
+			if dest == "" {
+				dest = defaultRestoreDir(archivePath)
+			}
+			pass, err := readPassphrase("Passphrase: ")
+			if err != nil {
+				return err
+			}
+			files, err := decryptArchive(archivePath, pass, dest)
+			if err != nil {
+				return err
+			}
+			logOK("restored %d file(s) into %s", len(files), styleAccent.Render(dest))
+			for _, f := range files {
+				logStep("%s", f)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&into, "into", "", "directory to restore into (default: the sessions dir the archive came from)")
+	return cmd
+}
+
+// defaultRestoreDir returns the live sessions dir for an archive stored under
+// <sessionsDir>/.archive/encrypted/, else the archive's own directory.
+func defaultRestoreDir(archivePath string) string {
+	abs, err := filepath.Abs(archivePath)
+	if err != nil {
+		return filepath.Dir(archivePath)
+	}
+	encDir := filepath.Dir(abs) // .../encrypted
+	if filepath.Base(encDir) == encryptedSubdir {
+		archiveDir := filepath.Dir(encDir) // .../.archive
+		if filepath.Base(archiveDir) == archiveSubdir {
+			return filepath.Dir(archiveDir) // the sessions dir
+		}
+	}
+	return filepath.Dir(abs)
+}
+
+// readPassphrase reads a line from the terminal without echoing it.
+func readPassphrase(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func reportImportCmd() *cobra.Command {
@@ -234,6 +304,10 @@ func (s *webServer) handler() http.Handler {
 	mux.HandleFunc("PUT /api/prefs", s.handlePrefsPut)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	mux.HandleFunc("POST /api/session/archive", s.handleSessionArchive)
+	mux.HandleFunc("POST /api/session/unarchive", s.handleSessionUnarchive)
+	mux.HandleFunc("POST /api/session/encrypt", s.handleSessionEncrypt)
+	mux.HandleFunc("GET /api/session/encrypted", s.handleEncryptedList)
 	mux.HandleFunc("GET /api/logsearch", s.handleLogSearch)
 
 	// Container control (web_control.go).
@@ -471,7 +545,11 @@ func (s *webServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sessions, err := listSessions(name)
+	list := listSessions
+	if r.URL.Query().Get("archived") == "1" {
+		list = listArchivedSessions
+	}
+	sessions, err := list(name)
 	if err != nil {
 		httpError(w, http.StatusNotFound, err)
 		return
@@ -489,12 +567,89 @@ func (s *webServer) handleSession(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, errors.New("missing ?id="))
 		return
 	}
-	sess, err := getSession(name, id)
+	get := getSession
+	if r.URL.Query().Get("archived") == "1" {
+		get = getArchivedSession
+	}
+	sess, err := get(name, id)
 	if err != nil {
 		httpError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, sess)
+}
+
+// handleSessionArchive / handleSessionUnarchive move a capture between the live
+// sessions dir and the engagement's archive subdir.
+func (s *webServer) handleSessionArchive(w http.ResponseWriter, r *http.Request) {
+	s.moveSession(w, r, archiveSession)
+}
+
+func (s *webServer) handleSessionUnarchive(w http.ResponseWriter, r *http.Request) {
+	s.moveSession(w, r, unarchiveSession)
+}
+
+func (s *webServer) moveSession(w http.ResponseWriter, r *http.Request, move func(string, string) error) {
+	name, ok := engagementParam(w, r)
+	if !ok {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		httpError(w, http.StatusBadRequest, errors.New("missing ?id="))
+		return
+	}
+	if err := move(name, id); err != nil {
+		httpError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleSessionEncrypt age-encrypts an archived session with a passphrase from
+// the request body (loopback only, behind the CSRF guard) and returns the
+// archive filename. The plaintext is removed; restore is via the CLI.
+func (s *webServer) handleSessionEncrypt(w http.ResponseWriter, r *http.Request) {
+	name, ok := engagementParam(w, r)
+	if !ok {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		httpError(w, http.StatusBadRequest, errors.New("missing ?id="))
+		return
+	}
+	var body struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Passphrase) == "" {
+		httpError(w, http.StatusBadRequest, errors.New("empty passphrase"))
+		return
+	}
+	path, err := encryptSession(name, id, body.Passphrase)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "archive": filepath.Base(path)})
+}
+
+// handleEncryptedList returns the encrypted archive filenames for an engagement,
+// so the UI can show that cold-stored sessions exist (restore is CLI-only).
+func (s *webServer) handleEncryptedList(w http.ResponseWriter, r *http.Request) {
+	name, ok := engagementParam(w, r)
+	if !ok {
+		return
+	}
+	archives, err := encryptedArchives(name)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"archives": archives})
 }
 
 func (s *webServer) handleLogSearch(w http.ResponseWriter, r *http.Request) {

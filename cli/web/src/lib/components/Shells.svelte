@@ -47,7 +47,7 @@
 
 <div class="view">
   <div class="bar">
-    <span>Workspace <code>{app.meta?.workspace ?? 'pomdock'}</code></span>
+    <span>tmux workspace <code>{app.meta?.workspace ?? 'pomdock'}</code></span>
     {#if attach}
       <span class="muted">attach:</span><code>{attach}</code><CopyButton text={attach} />
       <span class="muted">inside tmux:</span><code>{switchCmd}</code><CopyButton text={switchCmd} />
@@ -59,10 +59,10 @@
     {#if error}
       <div class="empty">{error}</div>
     {:else if loaded && !shells.length}
-      <div class="empty">No shell windows. Open one from <a href="#/containers">Containers</a>; every container shell is recorded.</div>
+      <div class="empty">No open terminals. Open one from <a href="#/containers">Containers</a>; recordings appear in <a href="#/sessions">Session history</a>.</div>
     {:else}
       <table>
-        <thead><tr><th>#</th><th>Window</th><th>Kind</th><th>Target</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Terminal window</th><th>Kind</th><th>Target</th><th></th></tr></thead>
         <tbody>
           {#each shells as s (s.id)}
             <tr>

@@ -5,11 +5,16 @@
     toastState.undo?.();
     toastState.visible = false;
   }
+
+  function dismiss() {
+    toastState.visible = false;
+  }
 </script>
 
-<div class="toast" class:show={toastState.visible} role="status">
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
+<div class="toast" class:show={toastState.visible} role="status" onclick={dismiss} title="click to dismiss">
   {toastState.message}
-  {#if toastState.undo}<button class="sm" onclick={undo}>undo</button>{/if}
+  {#if toastState.undo}<button class="sm" onclick={(e) => (e.stopPropagation(), undo())}>undo</button>{/if}
 </div>
 
 <style>

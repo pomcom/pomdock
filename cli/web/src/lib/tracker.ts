@@ -48,8 +48,12 @@ export type SavedState = {
 const FIELD_KEYS: (keyof Fields)[] = ['incl', 'measure', 'ie', 'source', 'tester', 'mitre', 'outcome', 'comment', 'targets'];
 
 export function rowDefaults(r: ReportRow, d: Defaults): Fields {
+  // The measure is the tester's own short summary, written by hand. We only
+  // pre-fill it when atuin carried a deliberate intent (`pdsession <intent>`),
+  // which differs from the raw command; a plain command is left blank so it is
+  // not mistaken for a measure. The full command always lives in the comment.
   return {
-    incl: false, measure: r.measure, ie: '', source: d.source, tester: d.tester,
+    incl: false, measure: r.measure === r.command ? '' : r.measure, ie: '', source: d.source, tester: d.tester,
     mitre: '', outcome: '', comment: r.command, targets: r.targets,
   };
 }
@@ -159,6 +163,50 @@ export function noiseMatcher(rules: string[]): (cmd: string) => boolean {
     const c = cmd.toLowerCase();
     return subs.some((s) => c.includes(s)) || res.some((re) => re.test(cmd));
   };
+}
+
+/**
+ * fzf-style fuzzy match: every character of `needle` must appear in `hay` in
+ * order (case-insensitive). Returns a score (higher is better) or -1 for no
+ * match. Contiguous runs and matches at word boundaries score higher, so the
+ * tightest, most word-aligned hits float to the top.
+ */
+export function fuzzyScore(hay: string, needle: string): number {
+  const n = needle.trim().toLowerCase();
+  if (!n) return 0;
+  const h = hay.toLowerCase();
+  let score = 0;
+  let hi = 0;
+  let prevMatch = -2;
+  for (let ni = 0; ni < n.length; ni++) {
+    const ch = n[ni];
+    const found = h.indexOf(ch, hi);
+    if (found < 0) return -1;
+    score += 1;
+    if (found === prevMatch + 1) score += 3; // adjacent to the previous hit
+    const before = found > 0 ? hay[found - 1] : '';
+    if (found === 0 || /[^A-Za-z0-9]/.test(before)) score += 2; // word boundary
+    score -= Math.min(found - hi, 3); // small penalty for skipped chars
+    prevMatch = found;
+    hi = found + 1;
+  }
+  return score;
+}
+
+/** The positions in `hay` matched by `needle`, greedily, for highlighting. */
+export function fuzzyIndices(hay: string, needle: string): number[] | null {
+  const n = needle.trim().toLowerCase();
+  if (!n) return [];
+  const h = hay.toLowerCase();
+  const out: number[] = [];
+  let hi = 0;
+  for (const ch of n) {
+    const found = h.indexOf(ch, hi);
+    if (found < 0) return null;
+    out.push(found);
+    hi = found + 1;
+  }
+  return out;
 }
 
 /** The first two words of a command: the default noise rule proposed for it. */

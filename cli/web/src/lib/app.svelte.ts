@@ -54,12 +54,12 @@ export async function loadEngagements(refresh = false) {
   const names = app.engagements.map((e) => e.name);
   const pick = [route.params.name, app.engagement, app.meta?.engagement, app.prefs.engagement]
     .find((n) => n && names.includes(n)) ?? names[0] ?? '';
-  if (pick !== app.engagement) selectEngagement(pick);
+  if (pick !== app.engagement) selectEngagement(pick, route.params.name === pick);
 }
 
-export function selectEngagement(name: string) {
+export function selectEngagement(name: string, preserveSession = false) {
   app.engagement = name;
-  if (route.view === 'tracker' || route.view === 'sessions') setParams({ name, id: '' });
+  if (route.view === 'tracker' || route.view === 'sessions') setParams({ name, ...(preserveSession ? {} : { id: '', archived: '' }) });
   if (name) setPref('engagement', name);
 }
 

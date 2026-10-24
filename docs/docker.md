@@ -95,7 +95,9 @@ upstream to gluetun (below) so Burp's egress follows the VPN.
 - Burp: Project options → Connections → Upstream proxy servers → `localhost:8888`
 
 gluetun's HTTP proxy is published on `127.0.0.1:8888` (loopback only), so Burp reaches it
-on the host and its requests exit via the VPN.
+on the host and its requests exit via the VPN. When several VPN engagements run at once,
+each one's gluetun takes the next free port (8888, 8889, …) instead of colliding; the exact
+port is printed when the sidecar comes up and by `pomdock docker burp --name <engagement>`.
 
 ## Environment variables
 
