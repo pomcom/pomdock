@@ -57,19 +57,24 @@ func newWorkspaceWindow(name, command string) (string, error) {
 	return windowID, nil
 }
 
-// styleWorkspaceStatus colours the workspace session's status line by the active
-// window's network route (the @pomdock_route window option set on each container
-// shell), matching the pane-border colours: green vpn, red direct, magenta tor,
-// cyan tor-vpn. Windows without a route (dashboard, VM shells) keep the default.
-// Scoped to the pomdock session, so the user's other tmux sessions are untouched.
+// styleWorkspaceStatus marks the active window's tab with its network route
+// colour (the @pomdock_route window option set on each container shell), matching
+// the pane-border colours: green vpn, red direct, magenta tor, cyan tor-vpn.
+// It leaves the status bar itself in the user's own theme — an earlier version
+// painted the whole bar in the route colour, which made the window list
+// unreadable. Scoped to the pomdock session, so other tmux sessions are
+// untouched; the route is also shown on the pane border, so this is only an
+// at-a-glance accent.
 func styleWorkspaceStatus() {
 	route := "#{@pomdock_route}"
 	bg := "bg=#{?#{==:" + route + ",vpn},green," +
 		"#{?#{==:" + route + ",direct},red," +
 		"#{?#{==:" + route + ",tor},magenta," +
-		"#{?#{==:" + route + ",tor-vpn},cyan,default}}}}"
-	fg := "fg=#{?#{==:" + route + ",},default,black}"
-	_ = exec.Command("tmux", "set-option", "-t", workspaceSession, "status-style", bg+","+fg).Run()
+		"#{?#{==:" + route + ",tor-vpn},cyan,blue}}}}"
+	// Restore the bar to the user's theme, then colour only the current tab.
+	_ = exec.Command("tmux", "set-option", "-u", "-t", workspaceSession, "status-style").Run()
+	_ = exec.Command("tmux", "set-option", "-t", workspaceSession,
+		"window-status-current-style", bg+",fg=black,bold").Run()
 }
 
 func setWindowOptions(windowID string, options map[string]string) error {
