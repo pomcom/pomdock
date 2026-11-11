@@ -45,5 +45,5 @@
 {/if}
 
 <style>
-  .err { color: var(--red); font-size: 12px; margin-top: 6px; font-family: var(--mono); white-space: pre-wrap; }
+  .err { color: var(--pd-danger); font-size: 0.75rem; margin-top: 6px; font-family: var(--pd-mono); white-space: pre-wrap; }
 </style>

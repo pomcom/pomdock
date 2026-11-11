@@ -74,3 +74,21 @@ func TestCommandOutputTimeout(t *testing.T) {
 		t.Fatalf("expected timeout, got %v", err)
 	}
 }
+
+func TestContainerWorkspaceBindingPrefersNewMountAndLabels(t *testing.T) {
+	mounts := []containerWorkspaceMount{{Source: "/legacy", Destination: "/home/kali/pentest"}, {Source: "/canonical", Destination: "/home/kali/workspace"}}
+	if got := containerWorkspaceSource(mounts); got != "/canonical" {
+		t.Fatalf("preferred binding = %q", got)
+	}
+	if got := containerWorkspaceSource(mounts[:1]); got != "/legacy" {
+		t.Fatalf("legacy binding = %q", got)
+	}
+	if got := containerWorkspaceSource([]containerWorkspaceMount{{Source: "/actual/.atuin", Destination: "/home/kali/.local/share/atuin"}}); got != "/actual" {
+		t.Fatalf("Atuin binding = %q", got)
+	}
+
+	opts, ok := createOptionsFromLabelMap("lab", map[string]string{"io.pomdock.role": "pentest", "io.pomdock.workspace-dir": "/canonical", "io.pomdock.loot-dir": "/legacy"})
+	if !ok || opts.LootDir != "/canonical" {
+		t.Fatalf("workspace label ignored: %+v", opts)
+	}
+}

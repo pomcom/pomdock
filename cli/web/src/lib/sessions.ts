@@ -7,11 +7,15 @@ export function sessionKey(s: Pick<Session, 'engagement' | 'id'>): string {
 }
 
 export function sessionName(s: Session, names: Record<string, string> = {}): string {
-  const custom = names[sessionKey(s)];
+  const custom = s.displayName ?? names[sessionKey(s)];
   if (custom) return custom;
   if (s.tag) return s.tag;
   const generated = s.source === 'script' && s.title === `Recorded session ${s.id.split('#')[0]}`;
   if (s.title && !generated) return s.title;
+  if (s.created > 0) {
+    const time = new Date(s.created * 1000).toLocaleTimeString('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return `${s.container || (s.source === 'script' ? 'Terminal' : 'Import')} · ${time}`;
+  }
   return s.source === 'script' ? 'Terminal recording' : 'Imported session';
 }
 
@@ -23,8 +27,8 @@ export function sessionState(s: Session): string {
 }
 
 export function sessionWhen(s: Session): string {
-  if (s.created > 0) return new Date(s.created * 1000).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  if (s.created > 0) return new Date(s.created * 1000).toLocaleString('en-GB', {
+    timeZone: 'Europe/Berlin', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
   return s.date || '';
 }
@@ -43,3 +47,7 @@ export function outputPreview(text: string, lines = 12, chars = 6000): string {
   if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1] ?? '')) end--;
   return text.slice(0, end);
 }
+
+// Reading positions stay in memory across views, never in localStorage with capture text.
+export const recordingPositions = new Map<string, { top: number; page: number; expanded: Set<number> }>();
+export const lastRecording = new Map<string, string>();

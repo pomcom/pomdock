@@ -241,12 +241,16 @@ func (m *tuiModel) openContainerTransferForm(container string, direction transfe
 	destination := textinput.New()
 	destination.Prompt = ""
 	destination.CharLimit = 2048
+	hostWorkspace := os.Getenv("PENTEST_LOOT_DIR")
+	if hostWorkspace == "" {
+		hostWorkspace = defaultWorkspaceDir(container)
+	}
 	if direction == transferUpload {
-		source.Placeholder = "~/loot/report.txt"
-		destination.SetValue("/home/kali/pentest/")
+		source.Placeholder = filepath.Join(hostWorkspace, "report.txt")
+		destination.SetValue("/home/kali/workspace/")
 	} else {
-		source.SetValue("/home/kali/pentest/")
-		destination.SetValue("~/pentest/" + container + "/")
+		source.SetValue("/home/kali/workspace/")
+		destination.SetValue(filepath.Clean(hostWorkspace) + string(os.PathSeparator))
 	}
 	m.transferForm = containerTransferForm{
 		active: true, direction: direction, container: container,
@@ -488,12 +492,15 @@ func (m tuiModel) containerConsoleView(width, height int) string {
 		"  " + styleAccent.Render("u") + "  Upload file",
 		"  " + styleAccent.Render("d") + "  Download file",
 		"  " + styleAccent.Render("C") + "  Full tmux shell",
+		"  Direct shell (no tmux):",
+		"  " + containerDirectShellCommand(name),
 	}
 	if width < 42 {
 		menu[0] = "  i  Identity / egress"
 		menu[1] = "  p  Ports"
 		menu[2] = "  t  Tor check"
 	}
+	menu = wrapConsoleLines(menu, width)
 	lines = append(lines, menu...)
 	lines = append(lines, styleMuted.Render(strings.Repeat("─", width)))
 

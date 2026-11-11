@@ -33,20 +33,31 @@ type containerView struct {
 	Legacy     bool   `json:"legacy"`
 	Engagement string `json:"engagement"`      // tracker engagement name for this container
 	Shell      string `json:"shell,omitempty"` // tmux window id of its open shell
-	Job        string `json:"job,omitempty"`   // id of a running job on it
+	Session    string `json:"session,omitempty"`
+	Connect    string `json:"connect"`
+	Direct     string `json:"direct"`
+	Job        string `json:"job,omitempty"` // id of a running job on it
 }
 
 type shellView struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Target string `json:"target"`
-	Active bool   `json:"active"`
-	Index  int    `json:"index"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Target   string `json:"target"`
+	Active   bool   `json:"active"`
+	Index    int    `json:"index"`
+	Session  string `json:"session"`
+	Attach   string `json:"attach"`
+	Switch   string `json:"switch"`
+	Location string `json:"location"`
+	WindowID string `json:"windowId"`
+	Clients  int    `json:"clients"`
+	Panes    int    `json:"panes"`
+	Direct   string `json:"direct,omitempty"`
 }
 
-// containerEngagement mirrors pentest.sh's loot-dir naming: the default
-// container uses ~/pentest itself, every other one ~/pentest/<name>.
+// containerEngagement keeps the default display alias stable. All new
+// instances, including pcm-pentest, own a named directory under workspaceRoot().
 func containerEngagement(name string) string {
 	if name == "pcm-pentest" {
 		return "(default)"
@@ -60,14 +71,16 @@ func (s *webServer) handleContainers(w http.ResponseWriter, _ *http.Request) {
 		httpError(w, http.StatusServiceUnavailable, fmt.Errorf("%w (is the Docker daemon running?)", err))
 		return
 	}
-	shells := map[string]string{}
-	if list, err := ListShellSessions(); err == nil {
-		for _, sh := range list {
-			if sh.Kind == "docker" {
-				shells[sh.Target] = sh.ID
+	shells := map[string]ShellSession{}
+	list, warnings := discoverShellSessions(cs)
+	for _, sh := range list {
+		if sh.Kind == "docker" && sh.Location == "container" {
+			if shells[sh.Target].ID == "" || sh.Active {
+				shells[sh.Target] = sh
 			}
 		}
 	}
+
 	running := map[string]string{}
 	for _, j := range s.jobs.list() {
 		if j.Status == "running" {
@@ -79,10 +92,10 @@ func (s *webServer) handleContainers(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, containerView{
 			Name: c.Name, State: c.Status, Image: c.Image, Route: c.Route, VPNFile: c.VPN,
 			HasVPN: c.HasVPN, HasTor: c.HasTor, Legacy: c.Legacy,
-			Engagement: containerEngagement(c.Name), Shell: shells[c.Name], Job: running[c.Name],
+			Engagement: containerEngagement(c.Name), Shell: shells[c.Name].ID, Session: shells[c.Name].Session, Connect: containerAttachShellCommand(c.Name, ""), Direct: containerDirectShellCommand(c.Name), Job: running[c.Name],
 		})
 	}
-	writeJSON(w, map[string]any{"containers": out})
+	writeJSON(w, map[string]any{"containers": out, "warnings": warnings})
 }
 
 type routeRequest struct {
@@ -233,27 +246,63 @@ func (s *webServer) startJob(w http.ResponseWriter, kind, target string, fn func
 	_ = json.NewEncoder(w).Encode(job)
 }
 
-// handleContainerShell opens (or reuses) the container's recorded shell window
-// in the pomdock tmux workspace and selects it, so any terminal attached to
-// the workspace shows it immediately.
+// Older browser bundles must not create detached shells when offering connection
+// instructions. Container shells are created by the explicit CLI attach command.
 func (s *webServer) handleContainerShell(w http.ResponseWriter, r *http.Request) {
 	name, ok := s.pentestContainer(w, r)
 	if !ok {
 		return
 	}
-	windowID, err := EnsureContainerShell(name)
-	if err != nil {
-		httpError(w, http.StatusConflict, err)
+	httpError(w, http.StatusConflict, fmt.Errorf("connect from your terminal: %s", containerAttachShellCommand(name, "")))
+}
+
+func (s *webServer) selectShellWindow(w http.ResponseWriter, windowID string) {
+	if output, err := exec.Command("tmux", "select-window", "-t", windowID).CombinedOutput(); err != nil {
+		httpError(w, http.StatusConflict, fmt.Errorf("select terminal: %s", strings.TrimSpace(string(output))))
 		return
 	}
-	_ = exec.Command("tmux", "select-window", "-t", windowID).Run()
-	clients, _ := exec.Command("tmux", "list-clients", "-t", "="+workspaceSession).Output()
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", windowID, "#{session_name}\t#{session_id}").Output()
+	fields := strings.Split(strings.TrimSpace(string(out)), "\t")
+	if err != nil || len(fields) != 2 {
+		httpError(w, http.StatusConflict, fmt.Errorf("terminal session is no longer available"))
+		return
+	}
+	clients, err := exec.Command("tmux", "list-clients", "-t", fields[1]).Output()
+	if err != nil {
+		httpError(w, http.StatusConflict, fmt.Errorf("read terminal clients: %w", err))
+		return
+	}
+	attach, switchCmd := shellAttachCommands(fields[0], windowID)
 	writeJSON(w, map[string]any{
-		"windowId": windowID,
+		"windowId": windowID, "session": fields[0],
 		"attached": strings.TrimSpace(string(clients)) != "",
-		"attach":   "tmux attach -t =" + workspaceSession,
-		"switch":   "tmux switch-client -t =" + workspaceSession,
+		"attach":   attach, "switch": switchCmd,
 	})
+}
+
+// Focus only an existing Pomdock-owned window. No command text is sent to it.
+func (s *webServer) handleShellFocus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if containerShellIDRe.MatchString(id) {
+		httpError(w, http.StatusConflict, fmt.Errorf("connect using the container attach command in your terminal"))
+		return
+	}
+	if !tmuxWindowIDRe.MatchString(id) {
+		httpError(w, http.StatusBadRequest, fmt.Errorf("invalid window id %q", id))
+		return
+	}
+	list, err := listHostShellSessions()
+	if err != nil {
+		httpError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	for _, shell := range list {
+		if shell.ID == id {
+			s.selectShellWindow(w, id)
+			return
+		}
+	}
+	httpError(w, http.StatusNotFound, fmt.Errorf("no pomdock shell window %s", id))
 }
 
 func (s *webServer) handleContainerCheck(w http.ResponseWriter, r *http.Request) {
@@ -270,30 +319,43 @@ func (s *webServer) handleContainerCheck(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *webServer) handleShells(w http.ResponseWriter, _ *http.Request) {
-	list, err := ListShellSessions()
+	list, warnings, err := DiscoverShellSessions()
 	if err != nil {
 		httpError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+
 	out := make([]shellView, 0, len(list))
 	for _, sh := range list {
-		out = append(out, shellView{ID: sh.ID, Name: sh.Name, Kind: sh.Kind, Target: sh.Target, Active: sh.Active, Index: sh.Index})
+		attach, switchCmd := shellAttachCommands(sh.Session, sh.ID)
+		if sh.Location == "container" {
+			attach, switchCmd = containerAttachShellCommand(sh.Target, sh.WindowID), ""
+		}
+		view := shellView{ID: sh.ID, Name: sh.Name, Kind: sh.Kind, Target: sh.Target, Active: sh.Active, Index: sh.Index, Session: sh.Session, Attach: attach, Switch: switchCmd, Location: sh.Location, WindowID: sh.WindowID, Clients: sh.Clients, Panes: sh.Panes}
+		if sh.Kind == "docker" {
+			view.Direct = containerDirectShellCommand(sh.Target)
+		}
+		out = append(out, view)
 	}
-	writeJSON(w, map[string]any{
-		"shells": out, "attach": "tmux attach -t =" + workspaceSession,
-		"switch": "tmux switch-client -t =" + workspaceSession,
-	})
+	writeJSON(w, map[string]any{"shells": out, "warnings": warnings})
+}
+
+// A session-qualified window target opens the intended window even when another
+// window in that session has since become active. Quoting keeps it copy-safe.
+func shellAttachCommands(session, windowID string) (string, string) {
+	target := shellQuote("=" + session + ":" + windowID)
+	return "tmux attach-session -t " + target, "tmux switch-client -t " + target
 }
 
 // handleShellClose kills a shell window, but only one pomdock itself manages in
 // its workspace — never an arbitrary tmux window.
 func (s *webServer) handleShellClose(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !tmuxWindowIDRe.MatchString(id) {
+	if !tmuxWindowIDRe.MatchString(id) && !containerShellIDRe.MatchString(id) {
 		httpError(w, http.StatusBadRequest, fmt.Errorf("invalid window id %q", id))
 		return
 	}
-	list, err := ListShellSessions()
+	list, warnings, err := DiscoverShellSessions()
 	if err != nil {
 		httpError(w, http.StatusServiceUnavailable, err)
 		return
@@ -307,6 +369,10 @@ func (s *webServer) handleShellClose(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true})
 			return
 		}
+	}
+	if len(warnings) > 0 {
+		httpError(w, http.StatusServiceUnavailable, fmt.Errorf("terminal discovery incomplete: %s", strings.Join(warnings, "; ")))
+		return
 	}
 	httpError(w, http.StatusNotFound, fmt.Errorf("no pomdock shell window %s", id))
 }

@@ -11,37 +11,61 @@ export const app = $state({
   engagement: '',
   prefs: {} as Prefs,
   error: '',
+  engagementBusy: false,
 });
 
 // Prefs are saved server-side ($XDG_CONFIG_HOME/pomdock/web-prefs.json) so they
 // survive port changes; the theme is mirrored to localStorage to avoid a flash
 // of the wrong theme before the first fetch returns.
 const THEME_KEY = 'pomdock.theme';
+const LAYOUT_KEY = 'pomdock.layout';
+const layoutKeys: (keyof Prefs)[] = ['theme', 'density', 'navWidth', 'navCollapsed', 'sessAsideWidth', 'sessAsideCollapsed', 'timelineWidth', 'replayTheme', 'trackerWidths', 'outputWrap'];
 try {
   const t = localStorage.getItem(THEME_KEY);
-  if (t === 'light' || t === 'dark') app.prefs.theme = t;
+  if (t === 'light' || t === 'dark' || t === 'system') app.prefs.theme = t;
+  const local = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+  for (const key of layoutKeys) if (local[key] !== undefined) Object.assign(app.prefs, { [key]: local[key] });
 } catch { /* storage unavailable */ }
 
 let prefsTimer: ReturnType<typeof setTimeout> | undefined;
 let prefsLoaded = false;
+let prefsDirty = false;
+let prefsInFlight: Promise<void> | null = null;
+let trackerFlush: (() => Promise<void>) | null = null;
+export function registerTrackerFlush(flush: () => Promise<void>) { trackerFlush = flush; }
+export async function flushTrackerEdits() { await trackerFlush?.(); }
 
 export function setPref<K extends keyof Prefs>(key: K, value: Prefs[K]) {
   app.prefs[key] = value;
   if (key === 'theme') {
     try { localStorage.setItem(THEME_KEY, String(value)); } catch { /* ignore */ }
   }
+  if (layoutKeys.includes(key)) {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(Object.fromEntries(layoutKeys.filter(k => app.prefs[k] !== undefined).map(k => [k, app.prefs[k]])))); } catch { /* ignore */ }
+  }
   if (!prefsLoaded) return; // never overwrite stored prefs with pre-load defaults
   clearTimeout(prefsTimer);
-  prefsTimer = setTimeout(() => {
-    api.savePrefs($state.snapshot(app.prefs)).catch((e) => toast(`saving preferences failed: ${e.message}`));
-  }, 400);
+  prefsDirty = true;
+  prefsTimer = setTimeout(() => { void flushPreferences().catch((e) => toast(`saving preferences failed: ${e.message}`)); }, 400);
+}
+
+export async function flushPreferences() {
+  clearTimeout(prefsTimer);
+  while (prefsDirty || prefsInFlight) {
+    if (prefsInFlight) { await prefsInFlight; continue; }
+    prefsDirty = false;
+    const task = api.savePrefs($state.snapshot(app.prefs)).then(() => {}).catch(e => { prefsDirty = true; throw e; });
+    prefsInFlight = task;
+    try { await task; } finally { if (prefsInFlight === task) prefsInFlight = null; }
+  }
 }
 
 export async function init() {
   try {
     const [meta, prefs] = await Promise.all([api.meta(), api.prefs()]);
     app.meta = meta;
-    app.prefs = { ...app.prefs, ...(prefs ?? {}) };
+    const localLayout = Object.fromEntries(layoutKeys.filter(k => app.prefs[k] !== undefined).map(k => [k, app.prefs[k]]));
+    app.prefs = { ...(prefs ?? {}), ...localLayout };
     prefsLoaded = true;
     await loadEngagements();
   } catch (e) {
@@ -80,11 +104,20 @@ export async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
+    const previous = document.activeElement as HTMLElement | null;
+    const selection = window.getSelection();
+    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
     const t = document.createElement('textarea');
     t.value = text;
+    t.style.cssText = 'position:fixed;left:-9999px;top:0';
     document.body.appendChild(t);
-    t.select();
-    document.execCommand('copy');
-    t.remove();
+    try {
+      t.select();
+      if (!document.execCommand('copy')) throw new Error('Clipboard access failed. Select and copy the text manually.');
+    } finally {
+      t.remove();
+      previous?.focus({ preventScroll: true });
+      if (selection) { selection.removeAllRanges(); for (const range of ranges) selection.addRange(range); }
+    }
   }
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,26 @@ var (
 
 func main() {
 	repoRoot = findRepoRoot()
+	if err := newRootCommand().Execute(); err != nil {
+		os.Exit(reportCLIError(err, os.Stderr))
+	}
+}
 
+func reportCLIError(err error, output io.Writer) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// Interactive scripts print their own diagnostics. Wrapped subprocess
+		// errors carry Go context that would otherwise disappear entirely.
+		if _, bare := err.(*exec.ExitError); !bare {
+			fmt.Fprintln(output, "Error:", err)
+		}
+		return exitErr.ExitCode()
+	}
+	fmt.Fprintln(output, "Error:", err)
+	return 1
+}
+
+func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "pomdock",
 		Short: "Kali pentest environment manager",
@@ -51,6 +71,8 @@ func main() {
 	docker.AddCommand(
 		dockerBuild(),
 		dockerExec(),
+		dockerAttach(),
+		dockerStart(),
 		dockerStop(),
 		dockerRm(),
 		dockerStatus(),
@@ -81,28 +103,24 @@ func main() {
 	root.AddCommand(
 		&cobra.Command{
 			Use:   "tui",
+			Args:  cobra.NoArgs,
 			Short: "Open the interactive TUI in the current terminal (Docker + VMs)",
 			RunE:  func(_ *cobra.Command, _ []string) error { return runTUI() },
 		},
 		&cobra.Command{
 			Use:   "version",
+			Args:  cobra.NoArgs,
 			Short: "Print the pomdock version",
 			Run:   func(_ *cobra.Command, _ []string) { fmt.Println("pomdock", version) },
 		},
 		docker,
 		vm,
 		webCmd(),
+		sessionsCmd(),
+		doctorCmd(),
 	)
 
-	if err := root.Execute(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			// The child already reported what went wrong on stderr.
-			os.Exit(exitErr.ExitCode())
-		}
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
+	return root
 }
 
 func showRootHelp(cmd *cobra.Command, _ []string) error {
@@ -186,167 +204,15 @@ func completeVMs(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellC
 }
 
 func completeContainers(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	return containerNames(), cobra.ShellCompDirectiveNoFileComp
-}
-
-// ── docker build ──────────────────────────────────────────────────────────────
-
-func dockerBuild() *cobra.Command {
-	return &cobra.Command{
-		Use:   "build",
-		Short: "Build the Kali Docker image",
-		RunE:  func(_ *cobra.Command, _ []string) error { return pentest("build") },
+	containers, err := ListContainers()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-}
-
-// ── docker exec ───────────────────────────────────────────────────────────────
-
-func dockerExec() *cobra.Command {
-	var vpnFile, name string
-	var whonix bool
-	cmd := &cobra.Command{
-		Use:   "exec",
-		Short: "Drop into a Kali shell (starts container if needed)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			var args []string
-			if name != "" {
-				args = append(args, "--name", name)
-			}
-			if vpnFile != "" {
-				args = append(args, "--vpn", vpnFile)
-			}
-			if whonix {
-				args = append(args, "--whonix")
-			}
-			args = append(args, "exec")
-			return pentest(args...)
-		},
+	names := make([]string, 0, len(containers))
+	for _, c := range containers {
+		names = append(names, c.Name)
 	}
-	cmd.Flags().StringVar(&vpnFile, "vpn", "", "VPN config file (.conf or .ovpn)")
-	cmd.Flags().BoolVar(&whonix, "whonix", false, "Route through Tor")
-	cmd.Flags().StringVar(&name, "name", "", "Named engagement")
-	return cmd
-}
-
-// ── docker stop ───────────────────────────────────────────────────────────────
-
-func dockerStop() *cobra.Command {
-	var name string
-	cmd := &cobra.Command{
-		Use:               "stop [name]",
-		Short:             "Stop container and sidecars",
-		ValidArgsFunction: completeContainers,
-		RunE: func(_ *cobra.Command, args []string) error {
-			var pargs []string
-			if name != "" {
-				pargs = append(pargs, "--name", name)
-			} else if len(args) > 0 {
-				pargs = append(pargs, "--name", args[0])
-			}
-			pargs = append(pargs, "stop")
-			return pentest(pargs...)
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "Named engagement")
-	return cmd
-}
-
-// ── docker rm ─────────────────────────────────────────────────────────────────
-
-func dockerRm() *cobra.Command {
-	var name string
-	cmd := &cobra.Command{
-		Use:               "rm [name]",
-		Short:             "Remove container and sidecars (prompts before deleting loot)",
-		ValidArgsFunction: completeContainers,
-		RunE: func(_ *cobra.Command, args []string) error {
-			var pargs []string
-			if name != "" {
-				pargs = append(pargs, "--name", name)
-			} else if len(args) > 0 {
-				pargs = append(pargs, "--name", args[0])
-			}
-			pargs = append(pargs, "rm")
-			return pentest(pargs...)
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "Named engagement")
-	return cmd
-}
-
-// ── docker status ─────────────────────────────────────────────────────────────
-
-func dockerStatus() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show container, VPN, and Tor status",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			containers, err := ListContainers()
-			if err != nil {
-				return err
-			}
-			if len(containers) == 0 {
-				fmt.Println(styleMuted.Render("  No pentest containers found."))
-				fmt.Println(styleMuted.Render("  Build one: pomdock docker build"))
-				return nil
-			}
-			hdr := func(s string) string { return styleAccent.Render(s) }
-			nameW := 24
-			for _, c := range containers {
-				if len(c.Name)+2 > nameW {
-					nameW = len(c.Name) + 2
-				}
-			}
-			fmt.Printf("  %-*s  %-14s  %-6s  %s\n",
-				nameW, hdr("NAME"), hdr("STATUS"), hdr("VPN"), hdr("TOR"))
-			fmt.Println("  " + styleMuted.Render(strings.Repeat("─", nameW+32)))
-			for _, c := range containers {
-				vpn := styleMuted.Render("no ")
-				if c.HasVPN {
-					vpn = styleOK.Render("yes")
-				}
-				tor := styleMuted.Render("no ")
-				if c.HasTor {
-					tor = styleOK.Render("yes")
-				}
-				fmt.Printf("  %s %-*s  %-24s  %-6s  %s\n",
-					icon(c.Status), nameW-2, c.Name,
-					stateColor(c.Status),
-					vpn, tor)
-			}
-			return nil
-		},
-	}
-}
-
-// ── docker logs ───────────────────────────────────────────────────────────────
-
-func dockerLogs() *cobra.Command {
-	var name string
-	cmd := &cobra.Command{
-		Use:   "logs",
-		Short: "Show gluetun / whonix logs",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			var pargs []string
-			if name != "" {
-				pargs = append(pargs, "--name", name)
-			}
-			pargs = append(pargs, "logs")
-			return pentest(pargs...)
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "Named engagement")
-	return cmd
-}
-
-// ── docker burp ───────────────────────────────────────────────────────────────
-
-func dockerBurp() *cobra.Command {
-	return &cobra.Command{
-		Use:   "burp",
-		Short: "Print Burp Suite proxy setup instructions",
-		RunE:  func(_ *cobra.Command, _ []string) error { return pentest("burp") },
-	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -519,6 +385,10 @@ func vmClone() *cobra.Command {
 				return fmt.Errorf("VM cloned, but profile metadata could not be copied: %w", err)
 			}
 			logOK("Cloned to '%s'", args[1])
+			profile := GuestProfileByID(GetVMProfileID(args[0]))
+			if profile.Family != "linux" {
+				logWarn("Hostname unchanged: source profile %q is not a known Linux guest; rename inside the clone if needed", profile.ID)
+			}
 			return nil
 		},
 	}
@@ -717,180 +587,16 @@ func vmWhonixGateway() *cobra.Command {
 	}
 }
 
-// whonixRoutingScript configures Tor routing inside the VM over SSH.
-// buildWhonixRoutingScript generates the script that configures static Tor routing
-// inside the VM. Whonix uses static IPs — no DHCP server runs on the gateway.
-func buildWhonixRoutingScript(gw string) string {
-	// Derive workstation IP and prefix from gateway: same /18 subnet, host .100
-	parts := strings.SplitN(gw, ".", 4)
-	wsIP := parts[0] + "." + parts[1] + "." + parts[2] + ".100"
-	prefix := "18"
-	return fmt.Sprintf(`sudo bash -s <<'INNER'
-set -e
-GW="%s"
-WS_IP="%s"
-WS_PREFIX="%s"
-
-whonix_dev=$(ip link show 2>/dev/null | awk -F': ' '/^[0-9]+: eth[1-9]/{print $2; exit}')
-[ -z "$whonix_dev" ] && { echo "No secondary NIC found"; exit 1; }
-echo "Whonix NIC: $whonix_dev"
-
-nmcli connection delete whonix-internal 2>/dev/null || true
-nmcli connection add type ethernet ifname "$whonix_dev" \
-    con-name whonix-internal \
-    ipv4.method manual \
-    ipv4.addresses "${WS_IP}/${WS_PREFIX}" \
-    ipv4.gateway "$GW" \
-    ipv4.dns "$GW" \
-    ipv4.never-default no \
-    connection.autoconnect yes
-nmcli connection up whonix-internal
-
-mgmt_dev=$(ip route show default 2>/dev/null | awk '/192\.168\./{print $5; exit}')
-if [ -n "$mgmt_dev" ]; then
-    mgmt_con=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
-        | awk -F: -v d="$mgmt_dev" '$2==d{print $1; exit}')
-    [ -n "$mgmt_con" ] && nmcli connection modify "$mgmt_con" ipv4.never-default yes \
-        && nmcli connection up "$mgmt_con"
-fi
-echo "Default route:"
-ip route show default
-INNER
-`, gw, wsIP, prefix)
-}
-
 func vmWhonixAttach() *cobra.Command {
-	return &cobra.Command{
-		Use:               "whonix-attach <name>",
-		Short:             "Add Whonix internal NIC → routes all VM traffic through Tor",
-		Args:              cobra.ExactArgs(1),
-		ValidArgsFunction: completeVMs,
-		RunE: func(_ *cobra.Command, args []string) error {
-			name := args[0]
-			profile := GuestProfileByID(GetVMProfileID(name))
-			if !profile.SupportsWhonix {
-				return fmt.Errorf("Whonix routing is not supported for the %s profile", profile.Label)
-			}
-			if !NetworkExists(whonixNetwork) {
-				return fmt.Errorf("%s not found — run: pomdock vm whonix-gateway", whonixNetwork)
-			}
-			state, _ := GetVMState("Whonix-Gateway")
-			if state != "running" {
-				return fmt.Errorf("Whonix-Gateway not running — start it: pomdock vm start Whonix-Gateway")
-			}
-			alreadyHasNIC := vmHasWhonixNIC(name)
-			vmState, _ := GetVMState(name)
-			if vmState != "running" {
-				logStep("Starting '%s'...", name)
-				if err := StartVM(name); err != nil {
-					return err
-				}
-			}
-			logStep("Waiting for management IP...")
-			mgmtIP, err := WaitForVMIP(name, 2*time.Minute)
-			if err != nil {
-				return err
-			}
-			logOK("Management IP: %s", mgmtIP)
-			if alreadyHasNIC {
-				logStep("Whonix NIC already attached — reconfiguring routing...")
-			} else {
-				logStep("Attaching Whonix-Internal NIC...")
-				if err := AttachWhonixNIC(name); err != nil {
-					return err
-				}
-			}
-			keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "kali")
-			var sshBase []string
-			if _, err := os.Stat(keyPath); err == nil {
-				sshBase = []string{"ssh", "-i", keyPath}
-			} else if _, err := exec.LookPath("sshpass"); err == nil {
-				sshBase = []string{"sshpass", "-p", "kali", "ssh"}
-			} else {
-				sshBase = []string{"ssh"}
-			}
-			opts := append(sshBase,
-				"-o", "StrictHostKeyChecking=no",
-				"-o", "UserKnownHostsFile=/dev/null",
-				"-o", "ConnectTimeout=5",
-				"kali@"+mgmtIP, "bash", "-s")
-			logStep("Waiting for SSH...")
-			for i := 0; i < 12; i++ {
-				probe := exec.Command(opts[0], opts[1:]...)
-				probe.Stdin = strings.NewReader("true")
-				if probe.Run() == nil {
-					break
-				}
-				time.Sleep(5 * time.Second)
-			}
-			gwIP := WhonixGatewayIP()
-			logStep("Configuring Tor routing inside VM (gateway: %s)...", gwIP)
-			sshCmd := exec.Command(opts[0], opts[1:]...)
-			sshCmd.Stdin = strings.NewReader(buildWhonixRoutingScript(gwIP))
-			sshCmd.Stdout, sshCmd.Stderr = os.Stdout, os.Stderr
-			_ = sshCmd.Run()
-			fmt.Println()
-			logOK("All traffic from '%s' now routes through Tor", name)
-			fmt.Printf("  %s  Management: %s\n", styleMuted.Render("→"), mgmtIP)
-			fmt.Printf("  %s  SOCKS5:     %s:9050\n", styleMuted.Render("→"), gwIP)
-			return nil
-		},
-	}
+	return &cobra.Command{Use: "whonix-attach <name>", Short: "Configure and verify the VM's default route through its Whonix NIC", Args: cobra.ExactArgs(1), ValidArgsFunction: completeVMs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return configureVMWhonix(cmd.Context(), args[0], cmd.OutOrStdout(), cmd.ErrOrStderr())
+		}}
 }
-
-const whonixRestoreScript = `sudo bash -s <<'INNER'
-set -e
-nmcli connection delete whonix-internal 2>/dev/null || true
-mgmt_dev=$(ip -4 addr show 2>/dev/null | awk '/192\.168\./{print $NF; exit}')
-[ -n "$mgmt_dev" ] && mgmt_con=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
-    | awk -F: -v d="$mgmt_dev" '$2==d{print $1; exit}')
-[ -n "$mgmt_con" ] && nmcli connection modify "$mgmt_con" ipv4.never-default no \
-    && nmcli connection up "$mgmt_con" && echo "Default route restored on '$mgmt_con'"
-INNER
-`
 
 func vmWhonixDetach() *cobra.Command {
-	return &cobra.Command{
-		Use:               "whonix-detach <name>",
-		Short:             "Remove Whonix NIC, restore normal routing",
-		Args:              cobra.ExactArgs(1),
-		ValidArgsFunction: completeVMs,
-		RunE: func(_ *cobra.Command, args []string) error {
-			name := args[0]
-			profile := GuestProfileByID(GetVMProfileID(name))
-			if !profile.SupportsWhonix {
-				return fmt.Errorf("Whonix routing is not supported for the %s profile", profile.Label)
-			}
-			if !vmHasWhonixNIC(name) {
-				logWarn("'%s' has no Whonix NIC", name)
-				return nil
-			}
-			mgmtIP, _ := GetVMIP(name)
-			logStep("Detaching Whonix NIC from '%s'...", name)
-			if err := DetachWhonixNIC(name); err != nil {
-				return err
-			}
-			if mgmtIP != "" {
-				keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "kali")
-				var sshBase []string
-				if _, err := os.Stat(keyPath); err == nil {
-					sshBase = []string{"ssh", "-i", keyPath}
-				} else {
-					sshBase = []string{"ssh"}
-				}
-				opts := append(sshBase,
-					"-o", "StrictHostKeyChecking=no",
-					"-o", "UserKnownHostsFile=/dev/null",
-					"-o", "ConnectTimeout=5",
-					"kali@"+mgmtIP, "bash", "-s")
-				logStep("Restoring default route...")
-				cmd := exec.Command(opts[0], opts[1:]...)
-				cmd.Stdin = strings.NewReader(whonixRestoreScript)
-				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-				_ = cmd.Run()
-			}
-			logOK("Whonix NIC removed — '%s' back on normal routing", name)
-			return nil
-		},
-	}
+	return &cobra.Command{Use: "whonix-detach <name>", Short: "Restore management routing and remove the Whonix NIC", Args: cobra.ExactArgs(1), ValidArgsFunction: completeVMs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return restoreVMWhonix(cmd.Context(), args[0], cmd.OutOrStdout(), cmd.ErrOrStderr())
+		}}
 }

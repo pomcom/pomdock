@@ -27,10 +27,11 @@ export type Item = Fields & {
   ended: string;
   command: string;
   origMeasure: string;
-  exit: number;
+  exit: number | null;
   noise: boolean;
   deleted: boolean;
   expanded: boolean;
+  sourceOverrides?: Record<string, RowOverride>;
 };
 
 export type Defaults = { tester: string; source: string };
@@ -41,6 +42,7 @@ type SavedMerged = Omit<Item, 'kind' | 'expanded' | 'deleted' | 'noise'> & { del
 /** What <loot>/.pomdock/tracker.json holds. Rows only store what differs from their defaults. */
 export type SavedState = {
   version: 1;
+  defaults?: Defaults;
   rows: Record<string, RowOverride>;
   merged: SavedMerged[];
 };
@@ -71,17 +73,18 @@ export function rowItem(r: ReportRow, d: Defaults, override: RowOverride = {}): 
 }
 
 export function buildItems(rows: ReportRow[], saved: SavedState | null, d: Defaults): Item[] {
+  d = saved?.defaults ?? d;
   const merged = saved?.merged ?? [];
   const absorbed = new Set(merged.flatMap((m) => m.ids));
   const items = rows.filter((r) => !absorbed.has(r.id)).map((r) => rowItem(r, d, saved?.rows?.[r.id]));
   for (const m of merged) {
-    items.push({ ...m, kind: 'merged', noise: false, deleted: !!m.deleted, expanded: false });
+    items.push({ ...m, exit: null, kind: 'merged', noise: false, deleted: !!m.deleted, expanded: false });
   }
   return items;
 }
 
 export function serialize(items: Item[], rowsById: Map<string, ReportRow>, d: Defaults): SavedState {
-  const state: SavedState = { version: 1, rows: {}, merged: [] };
+  const state: SavedState = { version: 1, defaults: { ...d }, rows: {}, merged: [] };
   for (const it of items) {
     if (it.kind === 'merged') {
       const { kind: _k, expanded: _e, noise: _n, deleted, ...rest } = it;
@@ -118,6 +121,7 @@ export function mergeItems(chk: Item[], d: Defaults): Item {
   const measure = sorted.map((it) => it.measure).filter(Boolean).join('; ');
   return {
     key: `m-${sorted[0].ids[0]}-${Date.now().toString(36)}`,
+    sourceOverrides: Object.assign({}, ...sorted.map(it => it.kind === 'merged' ? it.sourceOverrides ?? {} : { [it.key]: Object.fromEntries(FIELD_KEYS.map(key => [key, it[key]])) })),
     kind: 'merged',
     ids: sorted.flatMap((it) => it.ids),
     ts: sorted[0].ts,
@@ -128,9 +132,9 @@ export function mergeItems(chk: Item[], d: Defaults): Item {
     origMeasure: measure,
     command: sorted.map((it) => it.command).join('  |  '),
     targets: targets.join(', '),
-    exit: 0,
+    exit: null,
     noise: false,
-    incl: true,
+    incl: sorted.every(it => it.incl),
     ie: first((it) => it.ie),
     source: first((it) => it.source) || d.source,
     tester: first((it) => it.tester) || d.tester,

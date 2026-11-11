@@ -1,0 +1,28 @@
+/* Terminal.app's "Basic" profile colors, on a dark and a light background */
+.asciinema-player-theme-terminal-app-dark,
+.asciinema-player-theme-terminal-app-light {
+  --term-color-0: #000000;
+  --term-color-1: #990000;
+  --term-color-2: #00a600;
+  --term-color-3: #999900;
+  --term-color-4: #0000b2;
+  --term-color-5: #b200b2;
+  --term-color-6: #00a6b2;
+  --term-color-7: #bfbfbf;
+  --term-color-8: #666666;
+  --term-color-9: #e50000;
+  --term-color-10: #00d900;
+  --term-color-11: #e5e500;
+  --term-color-12: #0000ff;
+  --term-color-13: #e500e5;
+  --term-color-14: #00e5e5;
+  --term-color-15: #e5e5e5;
+}
+.asciinema-player-theme-terminal-app-dark {
+  --term-color-foreground: #ffffff;
+  --term-color-background: #000000;
+}
+.asciinema-player-theme-terminal-app-light {
+  --term-color-foreground: #000000;
+  --term-color-background: #ffffff;
+}

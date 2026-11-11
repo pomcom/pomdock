@@ -5,19 +5,20 @@
 # prints full network config (interfaces, routes, resolv.conf), asserts no leaks.
 #
 # Usage:
-#   ./test-network.sh                                         # plain (Docker bridge) only
-#   ./test-network.sh --vpn /path/to/wg.conf                 # plain + vpn
-#   ./test-network.sh --whonix                               # plain + whonix (Tor)
-#   ./test-network.sh --vpn FILE --whonix                    # all 4 Docker modes
-#   ./test-network.sh --vm kali-base                         # VM plain only
-#   ./test-network.sh --vm kali-base --vm-whonix             # VM plain + VM Whonix
-#   ./test-network.sh --vpn FILE --whonix --vm kali-base --vm-whonix  # everything
-#   ./test-network.sh --mode vpn --vpn FILE                  # single mode
-#   ./test-network.sh --no-teardown                          # keep containers for inspection
+#   ./test-network.sh --mode direct                         # Docker bridge
+#   ./test-network.sh --mode vpn --vpn FILE                 # VPN sidecar
+#   ./test-network.sh --mode tor                            # Tor gateway
+#   ./test-network.sh --mode tor-vpn --vpn FILE              # Tor over VPN
+#   ./test-network.sh --vpn FILE --whonix                    # all four Docker routes
+#   ./test-network.sh --mode vm --vm NAME                   # current VM routing
+#   ./test-network.sh --mode vm-whonix --vm NAME            # already Tor-routed VM
+#   ./test-network.sh --no-teardown                         # retain test containers
 #
-# Docker modes:  plain | vpn | whonix | stack
-# VM modes:      vm | vm-whonix
-# VM tests SSH into the running VM — Whonix-Gateway must be running for vm-whonix.
+# Docker modes: direct | vpn | tor | tor-vpn (default: direct)
+# Historical aliases: plain | whonix | stack. `--mode all` selects available modes.
+# --vm NAME adds VM checks; --vm-whonix additionally checks its existing Tor route.
+# VM tests do not create guests or change routing; Whonix-Gateway must be running
+# and the VM already configured for vm-whonix. Kali SSH credentials are required.
 
 set -uo pipefail
 
@@ -37,30 +38,72 @@ USE_VM_WHONIX=false
 
 # ── Arg parsing ────────────────────────────────────────────────────
 
+argument_error() { printf '[!] %s\n' "$*" >&2; exit 2; }
+require_value() {
+    [[ -n "${2:-}" && "${2:-}" != -* ]] || argument_error "$1 requires a value"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --vpn)
-            [[ -z "${2:-}" ]] && { echo "[!] --vpn requires a file path"; exit 1; }
+            require_value "$1" "${2:-}"
             VPN_FILE="$2"; shift 2 ;;
         --whonix)
             USE_WHONIX=true; shift ;;
         --no-teardown)
             NO_TEARDOWN=true; shift ;;
         --mode)
-            [[ -z "${2:-}" ]] && { echo "[!] --mode requires: plain|vpn|whonix|stack|vm|vm-whonix"; exit 1; }
-            MODE_FILTER="$2"
-            [[ "$MODE_FILTER" == "whonix" || "$MODE_FILTER" == "stack" ]] && USE_WHONIX=true
+            require_value "$1" "${2:-}"
+            case "$2" in
+                direct|plain) MODE_FILTER=plain ;;
+                vpn) MODE_FILTER=vpn ;;
+                tor|whonix) MODE_FILTER=whonix; USE_WHONIX=true ;;
+                tor-vpn|stack) MODE_FILTER=stack; USE_WHONIX=true ;;
+                vm|vm-whonix|all) MODE_FILTER="$2" ;;
+                *) argument_error "Unknown mode '$2'; use direct|vpn|tor|tor-vpn|vm|vm-whonix|all" ;;
+            esac
             shift 2 ;;
         --vm)
-            [[ -z "${2:-}" ]] && { echo "[!] --vm requires a VM name"; exit 1; }
+            require_value "$1" "${2:-}"
             VM_NAME="$2"; shift 2 ;;
         --vm-whonix)
             USE_VM_WHONIX=true; shift ;;
         -h|--help)
-            sed -n '2,16p' "$0" | sed 's/^# \?//'; exit 0 ;;
-        *) echo "[!] Unknown argument: $1"; exit 1 ;;
+            sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) argument_error "Unknown argument: $1" ;;
     esac
 done
+
+# Resolve and validate before probes, generated scripts, or cleanup hooks run.
+RUN_PLAIN=false; RUN_VPN=false; RUN_WHONIX=false; RUN_STACK=false
+RUN_VM_PLAIN=false; RUN_VM_WHONIX=false
+case "${MODE_FILTER:-all}" in
+    plain) RUN_PLAIN=true ;;
+    vpn) RUN_VPN=true ;;
+    whonix) RUN_WHONIX=true ;;
+    stack) RUN_STACK=true ;;
+    vm) RUN_VM_PLAIN=true ;;
+    vm-whonix) RUN_VM_WHONIX=true ;;
+    all)
+        RUN_PLAIN=true
+        [[ -n "$VPN_FILE" ]] && RUN_VPN=true
+        [[ "$USE_WHONIX" == true ]] && RUN_WHONIX=true
+        [[ -n "$VPN_FILE" && "$USE_WHONIX" == true ]] && RUN_STACK=true
+        [[ -n "$VM_NAME" ]] && RUN_VM_PLAIN=true
+        [[ -n "$VM_NAME" && "$USE_VM_WHONIX" == true ]] && RUN_VM_WHONIX=true
+        ;;
+esac
+[[ -z "$VPN_FILE" || -f "$VPN_FILE" ]] || argument_error "VPN profile not found: $VPN_FILE"
+if [[ "$RUN_VPN" == true || "$RUN_STACK" == true ]]; then
+    [[ -n "$VPN_FILE" ]] || argument_error "VPN mode requires --vpn FILE"
+fi
+if [[ "$RUN_VM_PLAIN" == true || "$RUN_VM_WHONIX" == true || "$USE_VM_WHONIX" == true ]]; then
+    [[ -n "$VM_NAME" ]] || argument_error "VM checks require --vm NAME"
+fi
+RUN_DOCKER=false
+if [[ "$RUN_PLAIN" == true || "$RUN_VPN" == true || "$RUN_WHONIX" == true || "$RUN_STACK" == true ]]; then
+    RUN_DOCKER=true
+fi
 
 # ── Colors / output ────────────────────────────────────────────────
 
@@ -75,6 +118,7 @@ err()  { echo -e "  ${RED}[!]${RESET} $*"; }
 
 cleanup() {
     rm -f "$INNER_SCRIPT"
+    [[ "$RUN_DOCKER" == true ]] || return
     local remaining
     remaining=$(docker ps -a --filter "name=${RUN_ID}" --format "{{.Names}}" 2>/dev/null || true)
     [[ -z "$remaining" ]] && return
@@ -430,7 +474,13 @@ run_check() {
         --cap-add NET_RAW
         -v "${INNER_SCRIPT}:/tmp/netcheck.sh:ro"
     )
-    [[ -n "$net_arg" ]] && run_args+=(--network "$net_arg")
+    if [[ -n "$net_arg" ]]; then
+        run_args+=(--network "$net_arg")
+    else
+        # Match pentest.sh's direct bridge runtime rather than inheriting a
+        # host resolver that may be unreachable from Docker's bridge.
+        run_args+=(--dns 1.1.1.1 --dns 1.0.0.1)
+    fi
 
     # Whonix mode: point DNS at socat bridge on 127.0.0.1:53 inside the sidecar.
     # --dns is not supported with --network container:X, so we mount a temp file.
@@ -461,58 +511,29 @@ echo -e "${BOLD}  pomdock — Network Stack Integration Tests${RESET}"
 echo -e "${BOLD}════════════════════════════════════════════════════════${RESET}"
 echo ""
 
-docker image inspect "$IMAGE" &>/dev/null || {
-    err "Image $IMAGE not found — build first: ./pentest.sh build"
-    exit 1
-}
+if [[ "$RUN_DOCKER" == true ]]; then
+    docker image inspect "$IMAGE" &>/dev/null || {
+        err "Image $IMAGE not found — build first: pomdock docker build"
+        exit 1
+    }
+fi
 
 HOST_JSON=$(curl -sf --max-time 10 https://am.i.mullvad.net/json 2>/dev/null || true)
 HOST_IP=$(echo "$HOST_JSON" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4 || echo "unreachable")
 HOST_ORG=$(echo "$HOST_JSON" | grep -o '"organization":"[^"]*"' | cut -d'"' -f4 || true)
 info "Host egress IP: $HOST_IP — ${HOST_ORG}  (compare against container egress below)"
 
-# Determine which modes to run
-RUN_PLAIN=false; RUN_VPN=false; RUN_WHONIX=false; RUN_STACK=false
-RUN_VM_PLAIN=false; RUN_VM_WHONIX=false
-
-case "${MODE_FILTER:-all}" in
-    plain)      RUN_PLAIN=true ;;
-    vpn)        RUN_VPN=true ;;
-    whonix)     RUN_WHONIX=true ;;
-    stack)      RUN_STACK=true ;;
-    vm)         RUN_VM_PLAIN=true ;;
-    vm-whonix)  RUN_VM_WHONIX=true ;;
-    all)
-        RUN_PLAIN=true
-        [[ -n "$VPN_FILE" ]] && RUN_VPN=true
-        [[ "$USE_WHONIX" == true ]] && RUN_WHONIX=true
-        [[ -n "$VPN_FILE" && "$USE_WHONIX" == true ]] && RUN_STACK=true
-        [[ -n "$VM_NAME" ]] && RUN_VM_PLAIN=true
-        [[ -n "$VM_NAME" && "$USE_VM_WHONIX" == true ]] && RUN_VM_WHONIX=true
-        ;;
-esac
-
-# Validate requirements
-[[ "$RUN_VPN" == true || "$RUN_STACK" == true ]] && [[ -z "$VPN_FILE" ]] && {
-    err "VPN mode requires --vpn FILE"
-    exit 1
-}
-[[ "$RUN_STACK" == true ]] && [[ "$USE_WHONIX" != true ]] && {
-    err "Stack mode requires --whonix"
-    exit 1
-}
-
 info "Modes to run:$(
-    [[ "$RUN_PLAIN"  == true ]] && echo -n " plain"
+    [[ "$RUN_PLAIN"  == true ]] && echo -n " direct"
     [[ "$RUN_VPN"    == true ]] && echo -n " vpn"
-    [[ "$RUN_WHONIX" == true ]] && echo -n " whonix"
-    [[ "$RUN_STACK"  == true ]] && echo -n " stack"
+    [[ "$RUN_WHONIX" == true ]] && echo -n " tor"
+    [[ "$RUN_STACK"  == true ]] && echo -n " tor-vpn"
 )"
 
 # ── plain ─────────────────────────────────────────────────────────
 
 if [[ "$RUN_PLAIN" == true ]]; then
-    run_check "plain — Docker bridge" "" "false" "false"
+    run_check "direct — Docker bridge" "" "false" "false"
 fi
 
 # ── vpn ──────────────────────────────────────────────────────────
@@ -533,10 +554,10 @@ fi
 if [[ "$RUN_WHONIX" == true ]]; then
     WN="${RUN_ID}-whonix"
     if start_whonix "$WN" ""; then
-        run_check "whonix — Kali → Tor" "container:$WN" "true" "true"
+        run_check "tor — Kali → Tor" "container:$WN" "true" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN"
     else
-        MODE_RESULTS+=("${RED}✗${RESET} whonix — sidecar failed to start")
+        MODE_RESULTS+=("${RED}✗${RESET} tor — sidecar failed to start")
         OVERALL_PASS=false
     fi
 fi
@@ -550,11 +571,11 @@ if [[ "$RUN_STACK" == true ]]; then
         # Stack: VPN hides Tor usage from the ISP, but traffic still exits via a
         # real Tor relay — check.torproject.org should see IsTor=true, same as
         # Tor-only mode, just carried over the VPN instead of the raw uplink.
-        run_check "stack — Kali → Tor → VPN" "container:$WN" "true" "true"
+        run_check "tor-vpn — Kali → Tor → VPN" "container:$WN" "true" "true"
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN" "$GT"
     else
         [[ "$NO_TEARDOWN" == false ]] && teardown_stack "$WN" "$GT"
-        MODE_RESULTS+=("${RED}✗${RESET} stack — sidecar failed to start")
+        MODE_RESULTS+=("${RED}✗${RESET} tor-vpn — sidecar failed to start")
         OVERALL_PASS=false
     fi
 fi

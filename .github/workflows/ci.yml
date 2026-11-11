@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      minimal-image:
+        description: Build an isolated minimal Kali image and exercise real terminals
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,6 +28,8 @@ jobs:
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
+      - name: Install terminal test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y tmux zsh
       - run: go mod download
       - run: go mod verify
       - name: Verify module files are tidy
@@ -55,15 +62,38 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - name: Bash syntax
-        run: bash -n pentest.sh setup-pentest.sh test*.sh scripts/*.sh kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh
+        run: |
+          for script in pentest.sh setup-pentest.sh test*.sh scripts/*.sh scripts/recording/*.sh scripts/recording/*.bash scripts/prompt/*.bash scripts/pomdock-shell scripts/pomdock-tmux scripts/pomsession scripts/pomdock-help scripts/pomrdp kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh; do
+            bash -n "$script"
+          done
+      - name: Zsh syntax
+        run: |
+          for script in scripts/recording/*.zsh scripts/prompt/*.zsh; do zsh -n "$script"; done
       - name: ShellCheck
-        run: shellcheck --severity=warning pentest.sh setup-pentest.sh test*.sh scripts/*.sh kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh
+        run: shellcheck --severity=warning pentest.sh setup-pentest.sh test*.sh scripts/*.sh scripts/recording/*.sh scripts/recording/*.bash scripts/prompt/*.bash scripts/pomdock-shell scripts/pomdock-tmux scripts/pomsession scripts/pomdock-help scripts/pomrdp kali-vm/*.sh vm-profiles/*.sh tor-gateway/*.sh
       - name: Session marker helper
         run: |
           marker="$(POMDOCK_CAPTURE_ACTIVE=1 scripts/pomsession start 'recon::web')"
           grep -Eq '^###POMDOCK-SESSION::recon-web::[0-9]+###$' <<<"$marker"
           ! scripts/pomsession status
+
+  recordings:
+    name: Recording engine and setup contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y zsh tmux
+          python -m pip install pytest
+      - run: make -C cli test-recordings test-build-context
 
   package:
     name: Install layout
@@ -87,5 +117,40 @@ jobs:
         run: |
           test -x "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock"
           test -x "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/pomdock-shell"
+          test -x "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/pomdock-tmux"
+          test -f "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/recording/atuin-init.zsh"
+          test ! -d "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts/tests"
+          test -z "$(find "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/scripts" -name __pycache__ -print -quit)"
+          test -f "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/vendor/atuin/Cargo.toml"
+          test ! -d "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/vendor/atuin/target"
+          test ! -d "$RUNNER_TEMP/pomdock-root/usr/local/lib/pomdock/vendor/atuin/.git"
           test -n "$(find cli/web/dist/assets -name '*.js')"
           "$RUNNER_TEMP/pomdock-root/usr/local/bin/pomdock" version | grep -Fx 'pomdock ci'
+
+  minimal-image:
+    name: Optional offline Kali terminal integration
+    if: github.event_name == 'workflow_dispatch' && inputs.minimal-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/web/package-lock.json
+      - name: Install terminal test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y tmux zsh
+      - name: Build isolated minimal image without personal dotfiles
+        run: scripts/build-image.sh pomdock-ci:minimal "$RUNNER_TEMP/no-personal-dotfiles" --toolset minimal
+      - name: Build application
+        run: make -C cli build
+      - name: Exercise offline terminal and recording workflows
+        env:
+          POMDOCK_TEST_IMAGE: pomdock-ci:minimal
+          POMDOCK_TEST_BINARY: ${{ github.workspace }}/cli/pomdock
+        run: python3 cli/web/tests/native-terminal.py

@@ -69,7 +69,7 @@ done
 section "── Apt tools ───────────────────────────────────"
 
 for bin in nmap ncat masscan whatweb sqlmap nikto wfuzz \
-           wireshark tcpdump curl wget whois \
+           wireshark tcpdump curl wget whois openvpn ip \
            smbclient crackmapexec enum4linux-ng \
            netexec hydra john hashcat; do
     if has "$bin"; then
@@ -108,7 +108,7 @@ done
 
 section "── Shell environment ────────────────────────────"
 
-for bin in zsh tmux git fzf nvim script pomdock-shell pomsession pdsession pomhelp; do
+for bin in zsh tmux git fzf nvim script pomdock-shell pomdock-tmux pomsession pdsession help pomdock-help pomrdp; do
     if has "$bin"; then
         pass "$bin  ($(command -v "$bin"))"
     else
@@ -116,6 +116,12 @@ for bin in zsh tmux git fzf nvim script pomdock-shell pomsession pdsession pomhe
         info "$(find_bin "$bin")"
     fi
 done
+
+if has xfreerdp3 || has xfreerdp; then
+    pass "FreeRDP client"
+else
+    fail "FreeRDP client missing (freerdp3-x11)"
+fi
 
 if has atuin || [[ -f "$HOME/.atuin/bin/atuin" ]]; then
     pass "atuin  ($(command -v atuin 2>/dev/null || echo "$HOME/.atuin/bin/atuin"))"
@@ -181,10 +187,10 @@ fi
 
 section "── Mounts ──────────────────────────────────────"
 
-if [[ -d /home/kali/pentest ]]; then
-    pass "/home/kali/pentest mounted"
+if [[ -d /home/kali/workspace ]]; then
+    pass "/home/kali/workspace available"
 else
-    warn "/home/kali/pentest not mounted"
+    warn "/home/kali/workspace unavailable"
     info "start via pentest.sh, not docker run directly"
 fi
 

@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Persistent container panes; only pane shells enter the transcript recorder.
+set -euo pipefail
+shopt -s inherit_errexit
+SESSION=workspace
+OWNER_OPTION=@pomdock_workspace
+OWNER_VALUE=pomdock
+
+usage() {
+    cat <<'HELP'
+Usage: pomdock-tmux attach [@WINDOW] | ensure | list | close @WINDOW
+Run as kali inside the container; root shells use sudo from a pane.
+  attach       reconnect to persistent workspace panes
+  ensure       print the active window ID without attaching or changing focus
+  list         tab-separated window ID/index/active/name/session/clients/panes
+  close @ID    close an owned workspace window
+Container prefix: Ctrl-b; detach with Ctrl-b d. Ctrl-a remains shell editing.
+Inside host tmux, send Ctrl-b Ctrl-b then the inner command (for example d).
+HELP
+}
+die() { printf 'pomdock-tmux: %s\n' "$*" >&2; exit 1; }
+mux() { command tmux -L pomdock -f /dev/null "$@" 9>&-; }
+missing_server() {
+    case "$1" in
+        *'no server running on '*|*'error connecting to '*'(No such file or directory)'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+owned() {
+    local value
+    value=$(mux show-option -v -t "=$SESSION:" "$OWNER_OPTION") || return
+    [[ $value == "$OWNER_VALUE" ]] || die "session '$SESSION' is not owned by pomdock"
+}
+valid_window() { [[ $1 =~ ^@[0-9]+$ ]] || die "invalid window ID: $1"; }
+window_target() {
+    local id=$1 windows candidate
+    valid_window "$id"
+    owned || return
+    windows=$(mux list-windows -t "=$SESSION:" -F '#{window_id}') || return
+    while IFS= read -r candidate; do
+        if [[ $candidate == "$id" ]]; then printf '=%s:%s\n' "$SESSION" "$id"; return 0; fi
+    done <<< "$windows"
+    die "window '$id' does not belong to '$SESSION'"
+}
+configure() {
+    mux set-option -t "=$SESSION:" default-command 'exec pomdock-shell'
+    mux set-option -t "=$SESSION:" default-shell /bin/bash
+    mux set-option -t "=$SESSION:" prefix C-b
+    mux set-option -t "=$SESSION:" prefix2 None
+    mux set-option -s set-clipboard on
+    mux set-option -s 'terminal-features[100]' 'xterm*:RGB'
+    mux set-option -s 'terminal-features[101]' 'screen*:RGB'
+    mux set-option -s 'terminal-features[102]' 'tmux*:RGB'
+    mux set-option -g default-terminal tmux-256color
+    mux set-option -t "=$SESSION:" status-style 'fg=#cbd5e1,bg=#1e2228'
+    mux set-option -t "=$SESSION:" status-left-style 'fg=#62c7d5,bg=#1e2228,bold'
+    mux set-option -t "=$SESSION:" status-left-length 50
+    mux set-option -t "=$SESSION:" status-left ' #H | #S '
+    mux set-option -t "=$SESSION:" status-right ''
+    mux set-option -gw window-status-style 'fg=#a7b0bd,bg=#1e2228'
+    mux set-option -gw window-status-current-style 'fg=#11151a,bg=#62c7d5,bold'
+    mux set-option -gw window-status-format ' #I:#W '
+    mux set-option -gw window-status-current-format ' #I:#W '
+    mux set-option -gw pane-border-style 'fg=#46515d'
+    mux set-option -gw pane-active-border-style 'fg=#62c7d5'
+    mux set-option -t "=$SESSION:" message-style 'fg=#f1f5f9,bg=#282d35'
+    mux set-option -t "=$SESSION:" "$OWNER_OPTION" "$OWNER_VALUE"
+}
+ensure_workspace() (
+    [[ -n ${POMDOCK_ENGAGEMENT:-} ]] || die 'POMDOCK_ENGAGEMENT is required to record pane shells'
+    local directory="$HOME/workspace" message variable
+    [[ -d $directory ]] || die "workspace directory is missing: $directory"
+    command -v pomdock-shell >/dev/null || die 'pomdock-shell is missing; update the image'
+    mkdir -p "$HOME/.cache/pomdock"
+    exec 9>"$HOME/.cache/pomdock/tmux-ensure.lock"
+    flock -x 9
+    if ! message=$(mux has-session -t "=$SESSION:" 2>&1); then
+        if missing_server "$message" || [[ $message == *"can't find session: $SESSION"* ]]; then
+            mux new-session -d -s "$SESSION" -n shell -c "$directory" 'exec pomdock-shell'
+            configure
+        else
+            die "$message"
+        fi
+    else
+        owned || return
+    fi
+    # Remove recorder identity inherited by callers already inside a recorded
+    # terminal. Each new pane's system zsh startup will create its own capture.
+    for variable in POMDOCK_CAPTURE POMDOCK_CAPTURE_ACTIVE POMDOCK_PTY POMDOCK_SESSION_LOG POMDOCK_SHELL_CONTEXT; do
+        mux set-environment -r -t "=$SESSION:" "$variable"
+    done
+    mux set-environment -t "=$SESSION:" POMDOCK_ENGAGEMENT "$POMDOCK_ENGAGEMENT"
+    mux set-environment -t "=$SESSION:" POMDOCK_SESSION_DIR "${POMDOCK_SESSION_DIR:-$directory/sessions}"
+    mux set-environment -t "=$SESSION:" COLORTERM "$COLORTERM"
+    mux display-message -p -t "=$SESSION:" '#{window_id}'
+)
+list_windows() {
+    local message windows id target data index active session clients panes name
+    if ! message=$(mux show-option -v -t "=$SESSION:" "$OWNER_OPTION" 2>&1); then
+        if missing_server "$message"; then return 0; fi
+        die "$message"
+    fi
+    [[ $message == "$OWNER_VALUE" ]] || die "session '$SESSION' is not owned by pomdock"
+    windows=$(mux list-windows -t "=$SESSION:" -F '#{window_id}') || return
+    while IFS= read -r id; do
+        [[ -n $id ]] || continue
+        target="=$SESSION:$id"
+        data=$(mux display-message -p -t "$target" $'#{window_index}\t#{window_active}\t#{session_name}\t#{session_attached}\t#{window_panes}') || return
+        IFS=$'\t' read -r index active session clients panes <<< "$data"
+        name=$(mux display-message -p -t "$target" '#{window_name}') || return
+        name=$(printf '%s' "$name" | tr '[:cntrl:]' ' ')
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$index" "$active" "$name" "$session" "$clients" "$panes"
+    done <<< "$windows"
+}
+
+ACTION=${1:---help}
+case "$ACTION" in -h|--help|help) usage; exit 0 ;; esac
+[[ $(id -un) == kali && $(id -u) != 0 ]] || die 'run as kali (docker exec -u kali); use sudo inside a pane for root'
+command -v tmux >/dev/null || die 'tmux is missing; update the image'
+export TERM=${TERM:-xterm-256color} COLORTERM=${COLORTERM:-truecolor}
+[[ $TERM != dumb && $TERM != unknown ]] || export TERM=xterm-256color
+unset TMUX TMUX_PANE POMDOCK_CAPTURE POMDOCK_CAPTURE_ACTIVE POMDOCK_PTY POMDOCK_SESSION_LOG POMDOCK_SHELL_CONTEXT
+case "$ACTION" in
+    ensure) [[ $# == 1 ]] || die 'ensure takes no window ID'; ensure_workspace ;;
+    list) [[ $# == 1 ]] || die 'list takes no window ID'; list_windows ;;
+    attach)
+        [[ $# -le 2 ]] || die 'attach takes at most one window ID'
+        [[ $# == 1 ]] || valid_window "$2"
+        window=$(ensure_workspace)
+        [[ $# == 1 ]] || window=$2
+        target=$(window_target "$window")
+        # Attach is deliberately not wrapped in pomdock-shell/script: only the
+        # persistent panes are recorded, once per pane's actual PTY.
+        exec tmux -L pomdock -f /dev/null attach-session -t "$target" ;;
+    close)
+        [[ $# == 2 ]] || die 'close requires a window ID'
+        target=$(window_target "$2")
+        mux kill-window -t "$target" ;;
+    *) die "unknown action: $ACTION (use --help)" ;;
+esac

@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build && touch dist/.gitkeep",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "node --test src/lib/*.test.ts"
+    "test": "node --test src/lib/*.test.ts",
+    "test:browser": "node tests/browser.mjs",
+    "test:native-terminal": "python3 tests/native-terminal.py"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4.0.4",

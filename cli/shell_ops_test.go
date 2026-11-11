@@ -22,10 +22,10 @@ func TestShellWindowNameIsStableAndSafe(t *testing.T) {
 }
 
 func TestParseShellSessions(t *testing.T) {
-	sessions := parseShellSessions("@1\t0\t1\tunlabeled\t\t\t\t\t\n" +
-		"@2\t1\t1\tshell-alpha\t\t\talpha\t\t\n" +
-		"@3\t2\t0\tssh-lab\tvm\tlab\t\t\tlab\n" +
-		"@4\t3\t0\tvm-setup-win\t\t\t\tvm-provision\twin\n")
+	sessions := parseShellSessions("@1\t0\t1\tunlabeled\t\t\t\t\t\tpomdock\t$0\t\n" +
+		"@2\t1\t1\tshell-alpha\t\t\talpha\t\t\tpomdock\t$0\t\n" +
+		"@3\t2\t0\tssh-lab\tvm\tlab\t\t\tlab\tpomdock\t$0\t\n" +
+		"@4\t3\t0\tvm-setup-win\t\t\t\tvm-provision\twin\tpomdock\t$0\t\n")
 	if len(sessions) != 3 {
 		t.Fatalf("got %d sessions", len(sessions))
 	}
@@ -59,20 +59,6 @@ func TestVMSSHArgsUseProfileKey(t *testing.T) {
 func TestShellQuote(t *testing.T) {
 	if got := shellQuote("it's"); got != `'it'"'"'s'` {
 		t.Fatalf("shellQuote = %q", got)
-	}
-}
-
-func TestContainerShellCommandUsesRecorder(t *testing.T) {
-	got := containerShellCommand("client's-lab")
-	for _, want := range []string{
-		"POMDOCK_ENGAGEMENT=",
-		"pomdock-shell",
-		"rebuild the image to enable session recording",
-		`'client'"'"'s-lab'`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("container shell command missing %q: %s", want, got)
-		}
 	}
 }
 

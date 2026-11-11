@@ -10,6 +10,7 @@ import (
 
 type shellsMsg struct {
 	sessions []ShellSession
+	warnings []string
 	err      error
 }
 
@@ -78,7 +79,13 @@ func (m tuiModel) shellsView() string {
 	}
 	header := "   " + padRight("TARGET", nameWidth) + "  " + padRight("TYPE", 8) + "  " + padRight("STATE", 10) + "  WINDOW"
 	lines := []string{styleAccent.Render(header), styleMuted.Render(strings.Repeat("─", width))}
+	for _, warning := range m.shellWarnings {
+		lines = append(lines, styleWarn.Render(ansi.Truncate("  Discovery incomplete: "+warning, width, "…")))
+	}
 	if len(m.shells) == 0 {
+		if len(m.shellWarnings) > 0 {
+			return strings.Join(lines, "\n")
+		}
 		lines = append(lines,
 			styleMuted.Render("  No shell windows."),
 			styleMuted.Render("  Open a Docker shell with C or connect to a VM with c."),
@@ -95,12 +102,22 @@ func (m tuiModel) shellsView() string {
 			state = styleWarn.Render(padRight("active", 10))
 		}
 		target := padRight(ansi.Truncate(shell.Target, nameWidth, "…"), nameWidth)
-		kind := padRight(shell.Kind, 8)
+		kindLabel := shell.Kind
+		if shell.Location == "host" && shell.Kind == "docker" {
+			kindLabel = "host"
+		}
+		if shell.Location == "container" {
+			state = styleMuted.Render(padRight("detached", 10))
+			if shell.Clients > 0 {
+				state = styleOK.Render(padRight("attached", 10))
+			}
+		}
+		kind := padRight(kindLabel, 8)
 		sessionWidth := width - nameWidth - 28
 		if sessionWidth < 8 {
 			sessionWidth = 8
 		}
-		session := ansi.Truncate(shell.Name, sessionWidth, "…")
+		session := ansi.Truncate(shell.Session+":"+shell.Name, sessionWidth, "…")
 		lines = append(lines, fmt.Sprintf("%s● %s  %s  %s  %s", cursor, target, kind, state, session))
 	}
 	return strings.Join(lines, "\n")
@@ -120,10 +137,16 @@ func openVMShellCmd(vm VM) tea.Cmd {
 	}
 }
 
-// attachShellWindowCmd hands the terminal to tmux so the user lands in the
-// given workspace window. The TUI resumes once they detach (Ctrl-b d).
+// Resolve the owning backend before handing over the terminal. Container tmux
+// attaches as a child client; only legacy host windows switch an existing client.
 func attachShellWindowCmd(window, target string) tea.Cmd {
-	return tea.ExecProcess(attachWorkspaceWindowCommand(window), func(err error) tea.Msg {
-		return shellDetachedMsg{target: target, switched: insideTmux(), err: err}
-	})
+	return func() tea.Msg {
+		process, err := attachShellWindowCommand(window)
+		if err != nil {
+			return shellDetachedMsg{target: target, err: err}
+		}
+		return tea.ExecProcess(process, func(err error) tea.Msg {
+			return shellDetachedMsg{target: target, switched: !containerShellIDRe.MatchString(window) && insideTmux(), err: err}
+		})()
+	}
 }

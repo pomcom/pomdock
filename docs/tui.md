@@ -1,9 +1,12 @@
 # TUI
 
-`pomdock tui` opens the interactive terminal UI directly in the current terminal and is
-fine inside an existing tmux session. Running `pomdock` without a subcommand prints the
-command overview instead. Persistent shells, VM provisioning, and FreeRDP live in a
-detached tmux session named `pomdock` and are attached on demand.
+`pomdock tui` runs in the current terminal, including inside host tmux. Running
+`pomdock` alone prints the command overview.
+
+New Docker terminals use tmux **inside the container**. Reconnect through the TUI
+or `pomdock docker attach NAME`; `pomdock docker exec NAME` opens a direct recorded
+shell. VM shells, provisioning jobs and FreeRDP use the host `pomdock` session.
+Existing host Docker windows remain accessible without being moved or restarted.
 
 ## Global keys
 
@@ -39,7 +42,12 @@ help, `q` quits.
 
 ## Shells tab
 
-`c` / `Enter` attach, `n` new shell, `D` close.
+`c` / `Enter` attach, `n` opens the selected container workspace, `D` closes the
+selected window and its panes. Discovery warnings identify unavailable targets;
+readable terminals remain available.
 
-Attaching hands the terminal to tmux. `Ctrl+B d` (or `Ctrl+B L` when pomdock itself runs
-inside tmux) returns to the TUI; shells and jobs keep running.
+For container tmux, **Ctrl-b d** detaches; under default host tmux use
+**Ctrl-b Ctrl-b d**. Detaching preserves processes while the container runs.
+Closing a pane or stopping the container ends its processes. For legacy host/VM
+windows, **Ctrl-b d** returns to the TUI, or **Ctrl-b L** after switching from an
+existing host tmux client. Ctrl-a remains available to readline.

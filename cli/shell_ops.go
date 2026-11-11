@@ -13,12 +13,18 @@ import (
 )
 
 type ShellSession struct {
-	ID     string
-	Name   string
-	Kind   string
-	Target string
-	Active bool
-	Index  int
+	ID        string
+	Session   string
+	SessionID string
+	Name      string
+	Kind      string
+	Target    string
+	Active    bool
+	Index     int
+	Location  string
+	WindowID  string
+	Clients   int
+	Panes     int
 }
 
 var nonSessionChar = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -36,15 +42,12 @@ func shellWindowName(container string) string {
 	return fmt.Sprintf("shell-%s-%04x", safe, hash.Sum32()&0xffff)
 }
 
-func ListShellSessions() ([]ShellSession, error) {
+func listHostShellSessions() ([]ShellSession, error) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return nil, fmt.Errorf("tmux not found")
 	}
-	if exec.Command("tmux", "has-session", "-t", "="+workspaceSession).Run() != nil {
-		return nil, nil
-	}
-	out, err := exec.Command("tmux", "list-windows", "-t", "="+workspaceSession, "-F",
-		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_shell_kind}\t#{@pomdock_shell_target}\t#{@pomdock_container}\t#{@pomdock_job}\t#{@pomdock_vm}").CombinedOutput()
+	out, err := exec.Command("tmux", "list-windows", "-a", "-F",
+		"#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}\t#{@pomdock_shell_kind}\t#{@pomdock_shell_target}\t#{@pomdock_container}\t#{@pomdock_job}\t#{@pomdock_vm}\t#{session_name}\t#{session_id}\t#{@pomdock_container_session}\t#{session_attached}\t#{window_panes}").CombinedOutput()
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if tmuxServerAbsent(message) {
@@ -67,10 +70,18 @@ func parseShellSessions(output string) []ShellSession {
 	for _, line := range strings.Split(strings.TrimRight(output, "\r\n"), "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		fields := strings.Split(line, "\t")
-		if len(fields) != 9 {
+		if len(fields) != 12 && len(fields) != 14 {
+			continue
+		}
+		session, sessionID, container := fields[9], fields[10], fields[11]
+		// Only explicitly managed container sessions and the legacy jobs workspace.
+		if session != workspaceSession && container == "" {
 			continue
 		}
 		kind, target := fields[4], fields[5]
+		if container != "" {
+			kind, target = "docker", container
+		}
 		if kind == "" && fields[6] != "" {
 			kind, target = "docker", fields[6]
 		}
@@ -81,102 +92,47 @@ func parseShellSessions(output string) []ShellSession {
 			continue
 		}
 		index, _ := strconv.Atoi(fields[1])
+		clients, panes := 0, 0
+		if len(fields) == 14 {
+			var e1, e2 error
+			clients, e1 = strconv.Atoi(fields[12])
+			panes, e2 = strconv.Atoi(fields[13])
+			if e1 != nil || e2 != nil || clients < 0 || panes < 1 {
+				continue
+			}
+		}
 		sessions = append(sessions, ShellSession{
-			ID: fields[0], Index: index, Active: fields[2] == "1",
-			Name: fields[3], Kind: kind, Target: target,
+			ID: fields[0], Session: session, SessionID: sessionID, Index: index, Active: fields[2] == "1",
+			Name: fields[3], Kind: kind, Target: target, Location: "host", WindowID: fields[0], Clients: clients, Panes: panes,
 		})
 	}
 	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].Session != sessions[j].Session {
+			return sessions[i].Session < sessions[j].Session
+		}
 		return sessions[i].Index < sessions[j].Index
 	})
-	return sessions
-}
-
-func EnsureContainerShell(container string) (string, error) {
-	if err := requireTmux(); err != nil {
-		return "", err
-	}
-	if ContainerState(container) != "running" {
-		return "", fmt.Errorf("container '%s' is not running", container)
-	}
-	if windows, err := ListShellSessions(); err == nil {
-		for _, window := range windows {
-			if window.Kind == "docker" && window.Target == container {
-				return window.ID, nil
-			}
+	// A linked window is still one terminal. Listing never changes its links.
+	unique := sessions[:0]
+	seen := make(map[string]bool)
+	for _, window := range sessions {
+		if !seen[window.ID] {
+			unique = append(unique, window)
+			seen[window.ID] = true
 		}
-	} else {
-		return "", err
 	}
-
-	shellCommand := containerShellCommand(container)
-	windowID, err := newWorkspaceWindow(shellWindowName(container), shellCommand)
-	if err != nil {
-		return "", err
-	}
-	opts := map[string]string{
-		"@pomdock_container":    container,
-		"@pomdock_shell_kind":   "docker",
-		"@pomdock_shell_target": container,
-	}
-	// Color the window's pane border by network route so the context is
-	// obvious at a glance (green vpn / red direct / magenta tor / cyan tor-vpn).
-	if route := containerRouteLabel(container); route != "" {
-		color := routeBorderColor(route)
-		opts["@pomdock_route"] = route
-		opts["pane-border-status"] = "top"
-		opts["pane-border-format"] = fmt.Sprintf(" #[fg=%s,bold]%s#[default] %s ", color, route, container)
-		opts["pane-active-border-style"] = "fg=" + color + ",bold"
-		opts["pane-border-style"] = "fg=" + color
-	}
-	if err := setWindowOptions(windowID, opts); err != nil {
-		return "", err
-	}
-	return windowID, nil
+	return unique
 }
 
-// containerRouteLabel reads the pomdock network route recorded on a container
-// (io.pomdock.route: vpn|direct|tor|tor-vpn), or "" if unavailable.
-func containerRouteLabel(container string) string {
-	out, err := exec.Command("docker", "inspect", "-f",
-		`{{index .Config.Labels "io.pomdock.route"}}`, container).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func routeBorderColor(route string) string {
-	switch route {
-	case "vpn":
-		return "green"
-	case "direct":
-		return "red"
-	case "tor":
-		return "magenta"
-	case "tor-vpn":
-		return "cyan"
-	default:
-		return "white"
-	}
-}
-
-func containerShellCommand(container string) string {
-	// POMDOCK_ENGAGEMENT arms the image-owned recorder. Keep a fallback for
-	// containers created from an older image so their shell remains reachable.
-	shellEntry := "if command -v pomdock-shell >/dev/null 2>&1; then exec pomdock-shell; " +
-		"else echo 'pomdock: rebuild the image to enable session recording' >&2; exec zsh -l; fi"
-	return fmt.Sprintf(
-		"exec docker exec -it -w /home/kali/pentest -e TERM=xterm-256color -e COLORTERM=truecolor -e POMDOCK_ENGAGEMENT=%s %s sh -c %s",
-		shellQuote(container), shellQuote(container), shellQuote(shellEntry),
-	)
+func containerDirectShellCommand(container string) string {
+	return "pomdock docker exec --name " + shellQuote(container)
 }
 
 func EnsureVMShell(vm VM) (string, error) {
 	if err := requireTmux(); err != nil {
 		return "", err
 	}
-	if windows, err := ListShellSessions(); err == nil {
+	if windows, err := listHostShellSessions(); err == nil {
 		for _, window := range windows {
 			if window.Kind == "vm" && window.Target == vm.Name {
 				return window.ID, nil
@@ -247,7 +203,7 @@ func usableTerminalEnv(env []string) []string {
 	return append(result, "TERM=xterm-256color")
 }
 
-func KillShellSession(windowID string) error {
+func killHostShellSession(windowID string) error {
 	out, err := exec.Command("tmux", "kill-window", "-t", windowID).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("close shell window: %s", strings.TrimSpace(string(out)))

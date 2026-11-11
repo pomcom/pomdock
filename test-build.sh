@@ -81,12 +81,32 @@ info "Starting test container: $CONTAINER"
 
 docker run -d \
     --name "$CONTAINER" \
+    --hostname "$CONTAINER" \
+    --cap-add NET_ADMIN \
+    --device /dev/net/tun \
+    --dns 1.1.1.1 --dns 1.0.0.1 \
     "$IMAGE" \
     sleep infinity >/dev/null
 
 ok "Container started"
 
 # ── Run tests ────────────────────────────────────────────────────
+
+info "Testing in-container OpenVPN permissions and TUN support (no connection)..."
+docker exec "$CONTAINER" bash -euc '
+    command -v pomdock-tmux >/dev/null
+    pomdock-tmux --help >/dev/null
+    command -v openvpn >/dev/null
+    command -v ip >/dev/null
+    openvpn --version >/dev/null
+    test -c /dev/net/tun
+    trap '\''sudo -n openvpn --rmtun --dev pdvpn-test --dev-type tun --verb 0 >/dev/null 2>&1 || true'\'' EXIT
+    sudo -n openvpn --mktun --dev pdvpn-test --dev-type tun --verb 0
+    ip link show dev pdvpn-test >/dev/null
+    sudo -n openvpn --rmtun --dev pdvpn-test --dev-type tun --verb 0
+    trap - EXIT
+'
+ok "OpenVPN can create and remove a TUN interface as the Kali user"
 
 echo ""
 info "Running test.sh inside container..."
@@ -99,9 +119,10 @@ TEST_EXIT=$?
 # Exercise the real recording entrypoint without requiring an interactive human.
 info "Testing automatic shell session recording..."
 printf 'pdsession smoke\nprintf "pomdock recording smoke\\n"\nexit\n' \
-    | docker exec -i -e POMDOCK_ENGAGEMENT="$CONTAINER" "$CONTAINER" pomdock-shell >/dev/null
+    | docker exec -i -e POMDOCK_ENGAGEMENT="$CONTAINER" "$CONTAINER" \
+        script -q --return --command 'exec pomdock-shell' /dev/null >/dev/null
 docker exec -i "$CONTAINER" sh -lc \
-    'log=$(find /home/kali/pentest/sessions -maxdepth 1 -name "*.log" -type f | head -n1); test -n "$log" && grep -q "POMDOCK-SESSION::smoke" "$log" && grep -q "pomdock recording smoke" "$log"'
+    'log=$(find /home/kali/workspace/sessions -maxdepth 1 -name "*.log" -type f | head -n1); test -n "$log" && grep -q "POMDOCK-SESSION::smoke" "$log" && grep -q "pomdock recording smoke" "$log"'
 ok "Automatic session recording works"
 
 echo ""

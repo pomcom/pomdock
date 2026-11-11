@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Display local UP tunnel interfaces and IPv4 addresses; make no network calls."""
+import ipaddress
+import json
+import re
+import subprocess
+
+
+def context(interfaces):
+    result = []
+    for interface in interfaces:
+        if not isinstance(interface, dict) or 'UP' not in interface.get('flags', []):
+            continue
+        kind = interface.get('linkinfo', {}).get('info_kind')
+        if kind not in ('tun', 'wireguard'):
+            continue
+        name = interface.get('ifname', '')
+        # Keep prompt interpolation safe even if a user creates an unusual name.
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]+', name):
+            continue
+        for address in interface.get('addr_info', []):
+            if address.get('family') != 'inet':
+                continue
+            try:
+                value = ipaddress.IPv4Address(address.get('local', ''))
+            except ipaddress.AddressValueError:
+                continue
+            if value.is_unspecified or value.is_loopback:
+                continue
+            label = f'{name} {value}'
+            if label not in result:
+                result.append(label)
+    return ' · '.join(result)
+
+
+def main():
+    try:
+        process = subprocess.run(['ip', '-j', '-d', '-4', 'address', 'show'],
+                                 text=True, capture_output=True, timeout=.5, check=False)
+        if process.returncode:
+            return
+        interfaces = json.loads(process.stdout)
+        if isinstance(interfaces, list):
+            value = context(interfaces)
+            if value:
+                print(value)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, AttributeError):
+        pass
+
+
+if __name__ == '__main__':
+    main()

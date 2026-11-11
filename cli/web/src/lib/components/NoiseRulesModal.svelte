@@ -40,8 +40,8 @@
 </Modal>
 
 <style>
-  p { color: var(--subtext); margin: 0 0 12px; font-size: 12px; }
+  p { color: var(--pd-text-muted); margin: 0 0 12px; font-size: 0.75rem; }
   .none { margin: 0; }
-  .rule { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--surface0); }
-  .pat { flex: 1; font-family: var(--mono); font-size: 12px; }
+  .rule { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--pd-surface); }
+  .pat { flex: 1; font-family: var(--pd-mono); font-size: 0.75rem; }
 </style>

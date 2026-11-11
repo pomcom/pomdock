@@ -21,7 +21,7 @@ const byId = new Map(rows.map((r) => [r.id, r]));
 
 test('untouched rows serialize to an empty document', () => {
   const items = buildItems(rows, null, d);
-  assert.deepEqual(serialize(items, byId, d), { version: 1, rows: {}, merged: [] });
+  assert.deepEqual(serialize(items, byId, d), { version: 1, defaults: d, rows: {}, merged: [] });
 });
 
 test('edits round-trip through the saved document', () => {
@@ -86,4 +86,50 @@ test('TSV numbers included rows in time order and flattens newlines', () => {
   items[0].measure = 'Port scan';
   const cols = activeColumns(['mitre']).filter((c) => ['num', 'measure', 'comment'].includes(c.key));
   assert.equal(toTSV(items, cols, true), 'Number\tMeasure\tOptional measure description / comment\n1\tPort scan\tline1 line2 x\n2\t\tls');
+});
+
+test('saved defaults and per-row annotations survive archive-style reload and merge/split', () => {
+  const items = buildItems(rows, null, d);
+  items[0].measure = 'Identify exposed service';
+  items[0].comment = 'keep this annotation';
+  items[0].outcome = 'Successful';
+  const merged = mergeItems(items.slice(0, 2), d);
+  const state = JSON.parse(JSON.stringify(serialize([merged], byId, d)));
+  const restored = buildItems(rows, state, { tester: 'OTHER', source: 'different' });
+  const m = restored.find(it => it.kind === 'merged')!;
+  assert.equal(m.sourceOverrides?.a.measure, 'Identify exposed service');
+  assert.equal(m.sourceOverrides?.a.comment, 'keep this annotation');
+  assert.equal(m.sourceOverrides?.a.outcome, 'Successful');
+  assert.equal(restored.find(it => it.key === 'c')?.tester, d.tester);
+  assert.equal(restored.find(it => it.key === 'c')?.source, d.source);
+});
+
+test('temporary selection does not change persisted export inclusion or TSV scope', () => {
+  const items = buildItems(rows, null, d);
+  items[1].incl = true;
+  const temporarySelection = new Set([items[0].key, items[2].key]);
+  for (const item of items.filter(it => temporarySelection.has(it.key))) item.outcome = 'Reviewed';
+  const saved = serialize(items, byId, d);
+  assert.equal(saved.rows.a?.incl, undefined);
+  assert.equal(saved.rows.c?.incl, undefined);
+  assert.equal(saved.rows.b.incl, true);
+  const cols = activeColumns(['tester', 'mitre']);
+  const text = toTSV([...items].reverse(), cols, true);
+  assert.equal(text.split('\n').length, 2);
+  assert(text.includes(items[1].started));
+  assert(!text.includes(items[0].started));
+  assert.equal(saved.rows.a.outcome, 'Reviewed');
+  assert.equal(saved.rows.b.outcome, undefined);
+});
+
+test('merging never fabricates an exit code or silently includes excluded sources', () => {
+  const items = buildItems(rows, null, d);
+  items[0].incl = true;
+  const mixed = mergeItems(items.slice(0, 2), d);
+  assert.equal(mixed.exit, null);
+  assert.equal(mixed.incl, false);
+  assert.equal(mixed.sourceOverrides?.a.incl, true);
+  assert.equal(mixed.sourceOverrides?.b.incl, false);
+  items[1].incl = true;
+  assert.equal(mergeItems(items.slice(0, 2), d).incl, true);
 });

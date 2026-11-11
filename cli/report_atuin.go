@@ -16,11 +16,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Engagement is one ~/pentest/<name> loot dir that carries an atuin history DB.
+// Engagement is one managed workspace. DB is its expected optional Atuin path.
 type Engagement struct {
-	Name string `json:"name"`
-	DB   string `json:"db"`
-	Rows int    `json:"rows"`
+	Archived         bool   `json:"archived,omitempty"`
+	HistoryAvailable bool   `json:"historyAvailable"`
+	Name             string `json:"name"`
+	DB               string `json:"db"`
+	Rows             int    `json:"rows"`
 }
 
 // ReportRow is one derived candidate line for the team pentest-report sheet.
@@ -51,12 +53,30 @@ func mustLoadLocation(name string) *time.Location {
 	return loc
 }
 
-// pentestLootDir is the root that holds per-engagement loot dirs.
-// Mirrors pentest.sh: PENTEST_LOOT_DIR, default ~/pentest.
-func pentestLootDir() string {
-	if d := os.Getenv("PENTEST_LOOT_DIR"); d != "" {
-		return d
+// workspaceRoot is the host parent of named instance workspaces. The old
+// PENTEST_LOOT_DIR override remains an exact custom binding, not this root.
+func workspaceRoot() string {
+	if root := os.Getenv("POMDOCK_WORKSPACES_DIR"); root != "" {
+		return expandHome(root)
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("pomdock", "workspaces")
+	}
+	return filepath.Join(home, "pomdock", "workspaces")
+}
+
+func defaultWorkspaceDir(name string) string {
+	if name == "" || name == "(default)" {
+		name = "pcm-pentest"
+	}
+	return filepath.Join(workspaceRoot(), name)
+}
+
+// Kept for report errors and existing internal callers during path migration.
+func pentestLootDir() string { return workspaceRoot() }
+
+func legacyWorkspaceRoot() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "pentest"
@@ -64,49 +84,86 @@ func pentestLootDir() string {
 	return filepath.Join(home, "pentest")
 }
 
-// listEngagements finds every atuin history.db it can: the loot dirs under
-// PENTEST_LOOT_DIR (default ~/pentest), plus every pomdock pentest container's
-// mounted atuin dir — which is how engagements launched with a custom loot root
-// (e.g. ~/projects/<engagement>/pentest) become selectable.
+// listEngagements discovers manifests, captures, history databases and archives.
+// Container mounts and the registry extend discovery to custom loot locations.
 func listEngagements() ([]Engagement, error) {
-	var out []Engagement
-	byDB := map[string]bool{}   // dedup by resolved DB path
-	byName := map[string]bool{} // keep engagement names unique in the dropdown
-
-	add := func(name, db string) {
-		info, err := os.Stat(db)
-		if err != nil || info.IsDir() {
+	out := []Engagement{}
+	byRoot := map[string]bool{}
+	byName := map[string]int{}
+	add := func(name, loot string) {
+		loot = resolvePath(loot)
+		if byRoot[loot] {
 			return
 		}
-		key := resolvePath(db)
-		if byDB[key] {
+		live := liveEngagementAt(loot)
+		archives, _ := archivesAt(loot)
+		if !live && len(archives) == 0 {
 			return
 		}
-		byDB[key] = true
-		// Disambiguate a name clash that points at a different DB.
-		if byName[name] {
-			name = name + " (docker)"
+		if manifest, ok := readEngagementManifest(loot); ok {
+			name = manifest.Name
 		}
-		byName[name] = true
-		out = append(out, Engagement{Name: name, DB: db, Rows: countRows(db)})
+		if name == "pcm-pentest" {
+			name = "(default)"
+		}
+		original := name
+		for byName[name] > 0 {
+			byName[original]++
+			name = fmt.Sprintf("%s (%d)", original, byName[original])
+		}
+		byRoot[loot] = true
+		byName[name]++
+		db := filepath.Join(loot, ".atuin", "history.db")
+		history := regularFile(db)
+		rows := 0
+		if history {
+			rows = countRows(db)
+		}
+		out = append(out, Engagement{Name: name, DB: db, Rows: rows, Archived: !live && len(archives) > 0, HistoryAvailable: history})
+	}
+	// Runtime bindings and remembered names identify custom workspaces even
+	// when their directory basename differs from the instance name.
+	containers := engagementsFromContainers()
+	sort.Slice(containers, func(i, j int) bool { return containers[i].Name < containers[j].Name })
+	for _, entry := range containers {
+		add(entry.Name, filepath.Dir(filepath.Dir(entry.DB)))
+	}
+	roots := archiveRoots()
+	names := make([]string, 0, len(roots))
+	for name := range roots {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		add(name, roots[name])
 	}
 
-	// Loot dirs under the configured root.
-	root := pentestLootDir()
-	if entries, err := os.ReadDir(root); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				add(e.Name(), filepath.Join(root, e.Name(), ".atuin", "history.db"))
+	scanned := map[string]bool{}
+	scan := func(root string, legacyDefault bool) {
+		root = resolvePath(root)
+		if scanned[root] {
+			return
+		}
+		scanned[root] = true
+		if entries, err := os.ReadDir(root); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					add(entry.Name(), filepath.Join(root, entry.Name()))
+				}
+			}
+			if legacyDefault {
+				add("(default)", root)
 			}
 		}
-		add("(default)", filepath.Join(root, ".atuin", "history.db"))
 	}
-
-	// Running/known pentest containers, wherever their loot dir lives.
-	for _, e := range engagementsFromContainers() {
-		add(e.Name, e.DB)
+	legacyOverride := os.Getenv("PENTEST_LOOT_DIR")
+	if legacyOverride == "" || os.Getenv("POMDOCK_WORKSPACES_DIR") != "" {
+		scan(workspaceRoot(), false)
+		scan(legacyWorkspaceRoot(), true)
 	}
-
+	if legacyOverride != "" {
+		scan(expandHome(legacyOverride), true)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
@@ -139,9 +196,7 @@ func engagementsFromContainers() []Engagement {
 			continue
 		}
 		db := filepath.Join(src, "history.db")
-		if info, err := os.Stat(db); err == nil && !info.IsDir() {
-			out = append(out, Engagement{Name: name, DB: db})
-		}
+		out = append(out, Engagement{Name: name, DB: db})
 	}
 	return out
 }
@@ -153,7 +208,11 @@ func atuinMountSources(names []string) map[string]string {
 		return nil
 	}
 	format := `{{.Name}}` + "\t" +
-		`{{range .Mounts}}{{if eq .Destination "/home/kali/.local/share/atuin"}}{{.Source}}{{end}}{{end}}`
+		`{{range .Mounts}}{{if eq .Destination "/home/kali/.local/share/atuin"}}{{.Source}}{{end}}{{end}}` + "\t" +
+		`{{index .Config.Labels "io.pomdock.loot-dir"}}` + "\t" +
+		`{{range .Mounts}}{{if eq .Destination "/home/kali/workspace"}}{{.Source}}{{end}}{{end}}` + "\t" +
+		`{{range .Mounts}}{{if eq .Destination "/home/kali/pentest"}}{{.Source}}{{end}}{{end}}` + "\t" +
+		`{{index .Config.Labels "io.pomdock.workspace-dir"}}`
 	args := append([]string{"inspect", "--format", format}, names...)
 	out, err := exec.Command("docker", args...).Output()
 	if err != nil {
@@ -161,12 +220,29 @@ func atuinMountSources(names []string) map[string]string {
 	}
 	res := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 2 {
 			continue
 		}
 		name := strings.TrimPrefix(strings.TrimSpace(parts[0]), "/")
-		res[name] = strings.TrimSpace(parts[1])
+		src := strings.TrimSpace(parts[1])
+		// Prefer actual workspace mounts over stale labels. Older images have
+		// the same workspace at /home/kali/pentest; Atuin remains untouched.
+		for _, index := range []int{3, 4, 5, 2} {
+			if index >= 5 || index == 2 {
+				if src != "" {
+					break
+				} // real Atuin binding beats labels
+			}
+			if index < len(parts) {
+				workspace := strings.TrimSpace(parts[index])
+				if workspace != "" && workspace != "<no value>" {
+					src = filepath.Join(workspace, ".atuin")
+					break
+				}
+			}
+		}
+		res[name] = src
 	}
 	return res
 }

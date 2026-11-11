@@ -10,6 +10,8 @@ test('names use saved labels, then tags, then titles, without raw ID fallbacks',
   assert.equal(sessionName({ ...session, title: 'Recorded session review' }), 'Recorded session review');
   assert.equal(sessionName({ ...session, source: 'imported-paste', title: 'Imported: terminal.log' }), 'Imported: terminal.log');
   assert.equal(sessionName(session, { [sessionKey(session)]: 'Review' }), 'Review');
+  assert.equal(sessionName({ ...session, displayName: 'Engagement-local name' }, { [sessionKey(session)]: 'Old global name' }), 'Engagement-local name');
+  assert.equal(sessionName({ ...session, displayName: '' }, { [sessionKey(session)]: 'Old global name' }), 'Terminal recording');
   assert.notEqual(sessionKey(session), sessionKey({ ...session, engagement: 'other' }));
 });
 test('unclosed captures never claim confirmed liveness', () => {

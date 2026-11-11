@@ -109,7 +109,8 @@ sudo -v
 SUDO_KEEPER=$!
 
 TMP_DIR=$(mktemp -d)
-hostname=$(printf 'vm-%s' "$VM_NAME" | tr '[:upper:]_.' '[:lower:]--' | sed -E 's/[^a-z0-9-]+/-/g; s/-+$//' | cut -c1-63)
+hostname=$(printf '%s' "$VM_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//' | cut -c1-63 | sed 's/-*$//')
+hostname="${hostname:-vm}"
 public_key=$(<"$SSH_PUBLIC_KEY")
 
 cat > "${TMP_DIR}/user-data" <<EOF

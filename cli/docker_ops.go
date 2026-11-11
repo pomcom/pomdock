@@ -40,7 +40,7 @@ type ContainerCreateOptions struct {
 	VPNFile string
 	Whonix  bool
 	// LootDir is the host loot/history directory to mount. Empty means let
-	// pentest.sh pick its default (~/pentest/<name>). It is carried on the
+	// pentest.sh pick its default (~/pomdock/workspaces/<name>). It is carried on the
 	// container as the io.pomdock.loot-dir label so start/recreate from the
 	// web UI or TUI reproduce the original mount instead of the default.
 	LootDir string
@@ -152,7 +152,7 @@ func StopContainer(name string) error {
 }
 
 func stopContainerTo(name string, w io.Writer) error {
-	return runStreaming(w, "docker stop "+name, "docker", "stop", name)
+	return runContainerLifecycleTo(name, "stop", w)
 }
 
 func StartContainer(name string) error {
@@ -160,10 +160,7 @@ func StartContainer(name string) error {
 }
 
 func startContainerTo(name string, w io.Writer) error {
-	if opts, ok := createOptionsFromLabels(name); ok {
-		return createPentestContainerTo(opts, w)
-	}
-	return runStreaming(w, "docker start "+name, "docker", "start", name)
+	return runContainerLifecycleTo(name, "start", w)
 }
 
 // runStreaming runs a command with stdout and stderr going to w, so long
@@ -199,7 +196,40 @@ func createOptionsFromLabels(name string) (ContainerCreateOptions, bool) {
 	if err := json.Unmarshal(out, &labels); err != nil {
 		return ContainerCreateOptions{}, false
 	}
-	return createOptionsFromLabelMap(name, labels)
+	opts, managed := createOptionsFromLabelMap(name, labels)
+	if managed {
+		// Actual bindings take precedence over stale labels during recreation.
+		if out, err := exec.Command("docker", "inspect", "-f", "{{json .Mounts}}", name).Output(); err == nil {
+			var mounts []containerWorkspaceMount
+			if json.Unmarshal(out, &mounts) == nil {
+				if source := containerWorkspaceSource(mounts); source != "" {
+					opts.LootDir = source
+				}
+			}
+		}
+	}
+	return opts, managed
+}
+
+type containerWorkspaceMount struct {
+	Source      string
+	Destination string
+}
+
+func containerWorkspaceSource(mounts []containerWorkspaceMount) string {
+	for _, target := range []string{"/home/kali/workspace", "/home/kali/pentest"} {
+		for _, mount := range mounts {
+			if mount.Destination == target && mount.Source != "" {
+				return mount.Source
+			}
+		}
+	}
+	for _, mount := range mounts {
+		if mount.Destination == "/home/kali/.local/share/atuin" && mount.Source != "" {
+			return filepath.Dir(mount.Source)
+		}
+	}
+	return ""
 }
 
 func createOptionsFromLabelMap(name string, labels map[string]string) (ContainerCreateOptions, bool) {
@@ -211,30 +241,34 @@ func createOptionsFromLabelMap(name string, labels map[string]string) (Container
 		return ContainerCreateOptions{}, false
 	}
 	route := labels["io.pomdock.route"]
+	workspace := labels["io.pomdock.workspace-dir"]
+	if workspace == "" {
+		workspace = labels["io.pomdock.loot-dir"]
+	}
 	return ContainerCreateOptions{
 		Name:    name,
 		VPNFile: labels["io.pomdock.vpn-file"],
 		Whonix:  route == "tor" || route == "tor-vpn",
-		LootDir: labels["io.pomdock.loot-dir"],
+		LootDir: workspace,
 	}, true
 }
 
 func RemoveContainerStack(name string) error {
-	for _, candidate := range []string{name, sidecarName(name, true), sidecarName(name, false)} {
-		out, err := exec.Command("docker", "rm", "-f", candidate).CombinedOutput()
-		if err != nil && !strings.Contains(string(out), "No such container") {
-			return fmt.Errorf("docker rm %s: %s", candidate, strings.TrimSpace(string(out)))
-		}
-	}
-	return nil
+	return withCapturedOutput(func(w io.Writer) error { return runContainerLifecycleTo(name, "rm", w) })
 }
 
-func sidecarName(name string, vpn bool) string {
-	vpnName, torName := containerSidecarNames(name)
-	if vpn {
-		return vpnName
+// All interfaces share the CLI backend's route recovery, loot binding and
+// lifecycle metadata. Removing a runtime never purges engagement files here.
+func runContainerLifecycleTo(name, action string, w io.Writer) error {
+	if !containerNameRe.MatchString(name) {
+		return fmt.Errorf("invalid container name %q", name)
 	}
-	return torName
+	root := repoRoot
+	if root == "" {
+		root = findRepoRoot()
+	}
+	script := filepath.Join(root, "pentest.sh")
+	return runStreaming(w, action+" "+name, "bash", script, "--name", name, action)
 }
 
 func CreatePentestContainer(opts ContainerCreateOptions) error {

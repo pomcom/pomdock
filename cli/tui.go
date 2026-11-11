@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -112,8 +114,9 @@ type tuiModel struct {
 	pendingVM    string
 
 	// Persistent tmux-backed container shells
-	shells      []ShellSession
-	shellCursor int
+	shells        []ShellSession
+	shellWarnings []string
+	shellCursor   int
 
 	// Shared
 	logs         []string
@@ -240,18 +243,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case shellsMsg:
-		selectedName := ""
+		selectedID := ""
 		if selected := m.selectedShell(); selected != nil {
-			selectedName = selected.Name
+			selectedID = selected.ID
 		}
 		if msg.err != nil {
+			m.shellWarnings = []string{msg.err.Error()}
 			cmds = append(cmds, emit(logMsg{level: "err", text: msg.err.Error()}))
 			break
 		}
+		m.shellWarnings = msg.warnings
 		m.shells = msg.sessions
-		if selectedName != "" {
+		if selectedID != "" {
 			for i, shell := range m.shells {
-				if shell.Name == selectedName {
+				if shell.ID == selectedID {
 					m.shellCursor = i
 					break
 				}
@@ -390,7 +395,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		cmds = append(cmds,
-			emit(logMsg{level: "ok", text: fmt.Sprintf("%s window ready for '%s'; %s", msg.kind, msg.target, returnHint())}),
+			emit(logMsg{level: "ok", text: fmt.Sprintf("%s window ready for '%s'; %s", msg.kind, msg.target, shellReturnHint(msg.window))}),
 			attachShellWindowCmd(msg.window, msg.target),
 		)
 
@@ -399,9 +404,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil:
 			cmds = append(cmds, emit(logMsg{level: "err", text: fmt.Sprintf("Could not attach to '%s': %v", msg.target, msg.err)}))
 		case msg.switched:
-			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Switched tmux client to '%s' (session %s); %s", msg.target, workspaceSession, returnHint())}))
+			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Switched tmux client to '%s'; %s", msg.target, returnHint())}))
 		default:
-			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Left '%s'; it keeps running in tmux", msg.target)}))
+			cmds = append(cmds, emit(logMsg{level: "info", text: fmt.Sprintf("Returned from '%s' terminal", msg.target)}))
 		}
 		cmds = append(cmds, tea.ClearScreen, refreshAll())
 
@@ -800,10 +805,11 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 				cmds = append(cmds,
 					emit(logMsg{level: "info", text: fmt.Sprintf("Attaching Whonix to '%s'...", name)}),
 					bg(func() (string, error) {
-						if err := AttachWhonixNIC(name); err != nil {
-							return "", err
+						var output bytes.Buffer
+						if err := configureVMWhonix(context.Background(), name, &output, &output); err != nil {
+							return strings.TrimSpace(output.String()), err
 						}
-						return fmt.Sprintf("Whonix NIC attached to '%s'", name), nil
+						return strings.TrimSpace(output.String()), nil
 					}))
 			}
 		}
@@ -818,10 +824,11 @@ func (m *tuiModel) handleVMKey(key string) []tea.Cmd {
 			cmds = append(cmds,
 				emit(logMsg{level: "info", text: fmt.Sprintf("Detaching Whonix from '%s'...", name)}),
 				bg(func() (string, error) {
-					if err := DetachWhonixNIC(name); err != nil {
-						return "", err
+					var output bytes.Buffer
+					if err := restoreVMWhonix(context.Background(), name, &output, &output); err != nil {
+						return strings.TrimSpace(output.String()), err
 					}
-					return fmt.Sprintf("Whonix NIC removed from '%s'", name), nil
+					return strings.TrimSpace(output.String()), nil
 				}))
 		}
 	}
@@ -1011,8 +1018,8 @@ func refreshAll() tea.Cmd {
 			return vmsMsg(v)
 		},
 		func() tea.Msg {
-			shells, err := ListShellSessions()
-			return shellsMsg{sessions: shells, err: err}
+			shells, warnings, err := DiscoverShellSessions()
+			return shellsMsg{sessions: shells, warnings: warnings, err: err}
 		},
 	)
 }
@@ -1053,7 +1060,7 @@ func helpLineForTab(tab, width int) string {
 		if width < 100 {
 			return "  ↑↓ select  enter attach  n new  D close  tab switch  q quit"
 		}
-		return "  ↑↓ select  enter attach  n new  D close  tab switch  q quit  · " + returnHint()
+		return "  ↑↓ select  enter attach  n open  D close  tab switch  q quit"
 	}
 	if width < 112 {
 		return "  ↑↓ select  n new  s/S power  c ssh  r rdp  tab switch  ? help  q quit"

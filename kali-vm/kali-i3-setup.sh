@@ -8,6 +8,8 @@ export DEBIAN_FRONTEND=noninteractive
 # pomdock's VM name, if invoked via kali-libvirt-setup.sh. Falls back to "kali"
 # for standalone use (scp + ssh kali@<ip> bash kali-i3-setup.sh, no args).
 VM_NAME="${1:-kali}"
+VM_HOSTNAME=$(printf '%s' "$VM_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//' | cut -c1-63 | sed 's/-*$//')
+VM_HOSTNAME="${VM_HOSTNAME:-vm}"
 
 warn() { printf '⚠ %s\n' "$*" >&2; }
 
@@ -47,8 +49,13 @@ sudo timedatectl set-timezone Europe/Berlin
 # Every Kali VM otherwise ships with the same generic base-image hostname —
 # indistinguishable from every other one. Use pomdock's own name for this VM so
 # the prompt (see starship.toml below) says which machine you're actually on.
-echo "→ Setting hostname to ${VM_NAME}..."
-sudo hostnamectl set-hostname "$VM_NAME"
+echo "→ Setting hostname to ${VM_HOSTNAME}..."
+sudo hostnamectl set-hostname "$VM_HOSTNAME"
+if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+    sudo sed -i -E "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1 ${VM_HOSTNAME}/" /etc/hosts
+else
+    printf '127.0.1.1 %s\n' "$VM_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null
+fi
 
 echo "→ Installing i3, XFCE4, and base packages..."
 sudo apt-get install -y \

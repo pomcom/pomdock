@@ -64,8 +64,10 @@ func encryptSession(engagement, id, passphrase string) (string, error) {
 	}
 	members := []string{src}
 	if strings.HasSuffix(src, ".log") {
-		if t := strings.TrimSuffix(src, ".log") + ".timing"; fileExists(t) {
-			members = append(members, t)
+		for _, ext := range []string{".timing", ".start", ".commands.jsonl"} {
+			if t := strings.TrimSuffix(src, ".log") + ext; fileExists(t) {
+				members = append(members, t)
+			}
 		}
 	}
 	outDir, err := encryptedDir(engagement)
@@ -179,6 +181,25 @@ func decryptArchive(archivePath, passphrase, intoDir string) ([]string, error) {
 			return nil, err
 		}
 		base := filepath.Base(h.Name) // defend against path traversal
+		if h.Name == "manifest.json" {
+			var manifest struct {
+				Format string `json:"format"`
+			}
+			if err := json.NewDecoder(tr).Decode(&manifest); err != nil {
+				return nil, err
+			}
+			if manifest.Format == engagementArchiveFormat {
+				if err := ensureEngagementIdle(intoDir); err != nil {
+					return nil, err
+				}
+				if err := restoreEngagementAt(intoDir, archivePath, passphrase); err != nil {
+					return nil, err
+				}
+				invalidateEngagementCaches()
+				return append([]string(nil), engagementDirs...), nil
+			}
+			continue
+		}
 		if base == "manifest.json" || base == "." || base == string(filepath.Separator) {
 			continue
 		}

@@ -4,6 +4,8 @@ recon.md
 TODO.md
 bin/
 /atuin/
+# Local upstream reference checkout; the bundled processor lives in cli/recording_engine/.
+/kalico/
 vendor/atuin/target/
 vendor/atuin/.cargo/
 vendor/atuin/.claude/
@@ -26,6 +28,11 @@ cli/web/dist/*
 mullvad*.zip
 *.wireguard.zip
 
-# Pasted terminal scrollbacks imported via `pomdock report import` — may hold secrets
+# Local Python caches and test runner state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Pasted terminal scrollbacks imported via `pomdock sessions import` — may hold secrets
 *.tmp
 zflog.tmp

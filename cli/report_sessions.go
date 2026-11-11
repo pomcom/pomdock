@@ -16,29 +16,37 @@ import (
 // stdout. Stored as JSON under <lootdir>/sessions/<id>.json so it lives beside
 // the engagement's atuin history and survives container removal.
 type Session struct {
-	ID         string         `json:"id"`
-	Engagement string         `json:"engagement"`
-	Source     string         `json:"source"` // "imported-paste" | "script"
-	Title      string         `json:"title"`
-	Tag        string         `json:"tag"`  // user label from `pdsession <tag>`, "" if none
-	Date       string         `json:"date"` // YYYY-MM-DD
-	Created    int64          `json:"created"`
-	State      string         `json:"state,omitempty"` // open (no end marker), ended, imported
-	Ended      int64          `json:"ended,omitempty"`
-	Entries    []SessionEntry `json:"entries"`
+	CaptureID   string         `json:"captureId,omitempty"` // canonical shell ID for replay and raw operations
+	DisplayName *string        `json:"displayName,omitempty"`
+	Deleted     bool           `json:"deleted,omitempty"`
+	ID          string         `json:"id"`
+	Engagement  string         `json:"engagement"`
+	Source      string         `json:"source"` // "imported-paste" | "script"
+	Title       string         `json:"title"`
+	Tag         string         `json:"tag"`  // user label from `pdsession <tag>`, "" if none
+	Date        string         `json:"date"` // YYYY-MM-DD
+	Created     int64          `json:"created"`
+	State       string         `json:"state,omitempty"` // open (no end marker), ended, imported
+	Ended       int64          `json:"ended,omitempty"`
+	Entries     []SessionEntry `json:"entries"`
 }
 
 type SessionEntry struct {
-	TS      int64  `json:"ts"`   // ns since epoch, 0 if unknown
-	Date    string `json:"date"` // YYYY-MM-DD (from ts, or the --date fallback)
-	Time    string `json:"time"` // HH:MM if ts known, else ""
-	Cwd     string `json:"cwd"`
-	Command string `json:"command"`
-	Output  string `json:"output"`
+	SessionID string `json:"sessionId,omitempty"` // tagged section; command ID remains immutable
+	ID        string `json:"id"`
+	Deleted   bool   `json:"deleted,omitempty"`
+	Edited    bool   `json:"edited,omitempty"`
+	TS        int64  `json:"ts"`   // ns since epoch, 0 if unknown
+	Date      string `json:"date"` // YYYY-MM-DD (from ts, or the --date fallback)
+	Time      string `json:"time"` // HH:MM if ts known, else ""
+	Cwd       string `json:"cwd"`
+	Command   string `json:"command"`
+	Output    string `json:"output"`
 }
 
 // lootDirForEngagement resolves the loot dir (parent of .atuin) for an
-// engagement, wherever it lives (~/pentest/<name> or a custom root).
+// engagement, wherever it lives (~/pomdock/workspaces/<name>, a legacy root,
+// or an explicit custom binding). Historical command working directories stay unchanged.
 func lootDirForEngagement(name string) (string, error) {
 	db, err := engagementDB(name)
 	if err != nil {
@@ -329,6 +337,9 @@ var sessionCache = struct {
 type sessionCacheEntry struct {
 	size, mtime int64
 	atuin       dbSignature
+	index       dbSignature
+	timing      dbSignature
+	snapshot    dbSignature
 	sessions    []*Session
 }
 
@@ -349,16 +360,22 @@ func loadSessions(path, engagement string) ([]*Session, error) {
 	sessionCache.Lock()
 	c, ok := sessionCache.m[key]
 	sessionCache.Unlock()
-	if ok && c.size == info.Size() && c.mtime == info.ModTime().UnixNano() && c.atuin == atuin {
+	index := signatureOf(filepath.Join(filepath.Dir(path), "commands.jsonl"))
+	timing := signatureOf(strings.TrimSuffix(path, ".log") + ".timing")
+	snapshot := signatureOf(strings.TrimSuffix(path, ".log") + ".commands.jsonl")
+	if ok && c.timing == timing && c.snapshot == snapshot && c.index == index && c.size == info.Size() && c.mtime == info.ModTime().UnixNano() && c.atuin == atuin {
 		return c.sessions, nil
 	}
 	sessions, err := parseSessionFile(path, engagement)
 	if err != nil {
 		return nil, err
 	}
+	for _, s := range sessions {
+		identifyEntries(s)
+	}
 	sessionCache.Lock()
 	sessionCache.m[key] = sessionCacheEntry{
-		size: info.Size(), mtime: info.ModTime().UnixNano(), atuin: atuin, sessions: sessions,
+		timing: timing, snapshot: snapshot, index: index, size: info.Size(), mtime: info.ModTime().UnixNano(), atuin: atuin, sessions: sessions,
 	}
 	sessionCache.Unlock()
 	return sessions, nil
@@ -375,6 +392,9 @@ func parseSessionFile(path, engagement string) ([]*Session, error) {
 		}
 		return []*Session{s}, nil
 	}
+	if fileExists(strings.TrimSuffix(path, ".log") + ".start") {
+		return loadIndexedCapture(path, engagement)
+	}
 	return loadCaptureLog(path, engagement)
 }
 
@@ -383,7 +403,7 @@ func listSessions(engagement string) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionsFromFiles(engagement, files), nil
+	return sessionsFromFiles(engagement, files)
 }
 
 // listArchivedSessions lists the sessions in an engagement's archive subdir.
@@ -392,14 +412,35 @@ func listArchivedSessions(engagement string) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionsFromFiles(engagement, files), nil
+	return sessionsFromFiles(engagement, files)
 }
 
 // sessionsFromFiles parses each capture file into its logical sessions (output
 // bodies dropped for the list view) and returns them newest-first.
-func sessionsFromFiles(engagement string, files []string) []Session {
+func sessionsFromFiles(engagement string, files []string) ([]Session, error) {
 	out := []Session{}
+	sectionDirs := map[string]bool{}
+	indexedSections := map[string][]recordingSection{}
 	for _, f := range files {
+		if strings.HasSuffix(f, ".log") && fileExists(strings.TrimSuffix(f, ".log")+".start") {
+			dir := filepath.Dir(f)
+			if !sectionDirs[dir] {
+				sectionDirs[dir] = true
+				parts, err := readIndexedSections(dir, engagement, "")
+				if err != nil {
+					return nil, err
+				}
+				for _, part := range parts {
+					indexedSections[part.CaptureID] = append(indexedSections[part.CaptureID], part)
+				}
+			}
+			if meta, err := indexedCaptureMeta(f, engagement); err == nil {
+				for _, section := range sectionSessions(meta, indexedSections[meta.ID]) {
+					out = append(out, *section)
+				}
+			}
+			continue
+		}
 		sessions, err := loadSessions(f, engagement)
 		if err != nil {
 			continue
@@ -416,12 +457,17 @@ func sessionsFromFiles(engagement string, files []string) []Session {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 // capturePathForID returns the capture file (among files) whose parsed sessions
 // include id.
 func capturePathForID(engagement, id string, files []string) (string, error) {
+	for _, f := range files {
+		if strings.TrimSuffix(filepath.Base(f), ".log") == id && strings.HasSuffix(f, ".log") && fileExists(strings.TrimSuffix(f, ".log")+".start") {
+			return f, nil
+		}
+	}
 	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
 		if err != nil {
@@ -478,17 +524,68 @@ func unarchiveSession(engagement, id string) error {
 // moveCapture moves src (and the .timing sibling of a .log) into destDir and
 // drops the cache entry for the old path.
 func moveCapture(engagement, src, destDir string) error {
-	base := filepath.Base(src)
-	if err := os.Rename(src, filepath.Join(destDir, base)); err != nil {
-		return err
-	}
-	dropSessionCache(engagement, src)
+	members := []string{src}
 	if strings.HasSuffix(src, ".log") {
-		timing := strings.TrimSuffix(src, ".log") + ".timing"
-		if _, err := os.Stat(timing); err == nil {
-			_ = os.Rename(timing, filepath.Join(destDir, strings.TrimSuffix(base, ".log")+".timing"))
+		stem := strings.TrimSuffix(src, ".log")
+		// Snapshot only this shell's index events, including its completion records.
+		if data, err := os.ReadFile(filepath.Join(filepath.Dir(src), "commands.jsonl")); err == nil {
+			ids := map[string]bool{}
+			lines := strings.Split(string(data), "\n")
+			sub := strings.TrimSuffix(filepath.Base(src), ".log")
+			for _, line := range lines {
+				var r struct {
+					ID  string `json:"id"`
+					Sub string `json:"subid"`
+				}
+				if json.Unmarshal([]byte(line), &r) == nil && r.Sub == sub && r.ID != "" {
+					ids[r.ID] = true
+				}
+			}
+			var snapshot strings.Builder
+			for _, line := range lines {
+				var r struct {
+					ID  string `json:"id"`
+					Sub string `json:"subid"`
+				}
+				if json.Unmarshal([]byte(line), &r) == nil && (r.Sub == sub || ids[r.ID]) {
+					snapshot.WriteString(line)
+					snapshot.WriteByte('\n')
+				}
+			}
+			if snapshot.Len() > 0 {
+				if err := os.WriteFile(stem+".commands.jsonl", []byte(snapshot.String()), 0600); err != nil {
+					return err
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		for _, ext := range []string{".timing", ".start", ".commands.jsonl"} {
+			if fileExists(stem + ext) {
+				members = append(members, stem+ext)
+			}
 		}
 	}
+	for _, member := range members {
+		if _, err := os.Lstat(filepath.Join(destDir, filepath.Base(member))); err == nil {
+			return fmt.Errorf("archive destination already exists: %s", filepath.Base(member))
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	moved := []string{}
+	for _, member := range members {
+		if err := os.Rename(member, filepath.Join(destDir, filepath.Base(member))); err != nil {
+			for i := len(moved) - 1; i >= 0; i-- {
+				if rollback := os.Rename(filepath.Join(destDir, filepath.Base(moved[i])), moved[i]); rollback != nil {
+					return fmt.Errorf("move failed: %v; rollback failed: %w", err, rollback)
+				}
+			}
+			return err
+		}
+		moved = append(moved, member)
+	}
+	dropSessionCache(engagement, src)
 	return nil
 }
 
@@ -845,13 +942,13 @@ func loadCaptureLog(path, engagement string) ([]*Session, error) {
 			segmentState, segmentEnd = "ended", segments[idx+1].epoch
 		}
 		out = append(out, &Session{
-			ID: id, Engagement: engagement, Source: "script", Tag: seg.tag,
+			ID: id, CaptureID: stem, Engagement: engagement, Source: "script", Tag: seg.tag,
 			Title: title, Date: date, Created: created, State: segmentState, Ended: segmentEnd, Entries: entries,
 		})
 	}
 	if len(out) == 0 {
 		out = append(out, &Session{
-			ID: stem, Engagement: engagement, Source: "script",
+			ID: stem, CaptureID: stem, Engagement: engagement, Source: "script",
 			Title:   "Recorded session " + stem,
 			Date:    time.Unix(fileCreated, 0).In(berlinLoc).Format("2006-01-02"),
 			Created: fileCreated, State: state, Ended: ended, Entries: []SessionEntry{},
@@ -916,6 +1013,25 @@ func getArchivedSession(engagement, id string) (*Session, error) {
 
 func sessionByID(engagement, id string, files []string) (*Session, error) {
 	for _, f := range files {
+		if strings.TrimSuffix(filepath.Base(f), ".log") == id && strings.HasSuffix(f, ".log") && fileExists(strings.TrimSuffix(f, ".log")+".start") {
+			sessions, err := loadSessions(f, engagement)
+			if err != nil {
+				return nil, err
+			}
+			if len(sessions) == 1 && sessions[0].ID == id {
+				return sessions[0], nil
+			}
+			aggregate, err := indexedCaptureMeta(f, engagement)
+			if err != nil {
+				return nil, err
+			}
+			for _, section := range sessions {
+				aggregate.Entries = append(aggregate.Entries, section.Entries...)
+			}
+			return aggregate, nil
+		}
+	}
+	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
 		if err != nil {
 			continue
@@ -949,6 +1065,10 @@ func searchSessions(engagement, q string) ([]LogHit, error) {
 		return nil, err
 	}
 	lower := strings.ToLower(q)
+	state, err := readSessionEdits(engagement)
+	if err != nil {
+		return nil, err
+	}
 	hits := []LogHit{}
 	for _, f := range files {
 		sessions, err := loadSessions(f, engagement)
@@ -956,7 +1076,14 @@ func searchSessions(engagement, q string) ([]LogHit, error) {
 			continue
 		}
 		for _, s := range sessions {
+			s = curateSession(s, state)
+			if s.Deleted {
+				continue
+			}
 			for i, en := range s.Entries {
+				if en.Deleted {
+					continue
+				}
 				inCmd := q != "" && strings.Contains(strings.ToLower(en.Command), lower)
 				inOut := q != "" && strings.Contains(strings.ToLower(en.Output), lower)
 				if !inCmd && !inOut {

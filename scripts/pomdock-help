@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Shared command reference for the container's `help` entry point.
+
+set -euo pipefail
+
+printf 'Pomdock · %s · route: %s · time: Europe/Berlin\n' \
+    "${POMDOCK_ENGAGEMENT:-${POMDOCK_MACHINE:-container}}" "${POMDOCK_ROUTE:-direct}"
+if [[ "${POMDOCK_CAPTURE_ACTIVE:-}" == 1 || -n "${POMDOCK_CAPTURE:-}" ]]; then
+    printf 'Recording: on · %s\n' "${POMDOCK_SESSION_LOG:-$HOME/workspace/sessions/}"
+else
+    printf 'Recording: off · open a terminal through Pomdock to record\n'
+fi
+
+cat <<'EOF'
+
+Sessions
+  pomsession start TAG           label the next section of this recording
+  pdsession TAG                  short form of pomsession start TAG
+  pomsession status             show recording state and log path
+  atuin search                  search command history (Ctrl-R interactively)
+  ~/workspace                   shared files; sessions/ contains raw recordings
+
+Persistent terminals
+  pomdock-tmux attach            reconnect to container workspace panes
+  Ctrl-b d                      detach; pane commands keep running
+  Inside host tmux: Ctrl-b Ctrl-b, then the inner command (for example d).
+  Ctrl-A remains shell line editing; root shells use sudo inside a pane.
+
+Networking
+  netinfo                       route, gateway and reachable proxy services
+  bcurl URL / scurl URL          curl through host Burp / collaboration SOCKS
+  pc COMMAND                    run through collaboration SOCKS via proxychains
+  pcset [PORT]                  detect or choose the collaboration SOCKS port
+  burpenv / noproxy              set / clear shell HTTP proxy variables
+
+RDP
+  pomrdp -u USER HOST            connect; prompt for password
+  pomrdp -u USER -d DOMAIN HOST  connect with a domain account
+  pomrdp -u USER -H NTHASH HOST  pass the hash (target needs Restricted Admin)
+  pomrdp -h                     all options; HOST may include :PORT
+  Clipboard + resizing enabled; \\tsclient\loot maps to ~/workspace.
+
+On the host
+  pomdock web --name NAME       Session history and Tracker for an engagement
+  pomdock docker attach NAME    resume persistent container terminals
+  pomdock docker exec NAME      open a separate recorded shell without tmux
+  pomdock vm rdp NAME           RDP into a managed VM
+  pomdock --help                all CLI commands
+EOF
+
+if ! command -v xfreerdp3 >/dev/null 2>&1 && ! command -v xfreerdp >/dev/null 2>&1; then
+    printf '\nRDP client missing in this image: install freerdp3-x11 or recreate from an updated image.\n'
+fi

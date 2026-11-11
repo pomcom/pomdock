@@ -170,15 +170,17 @@ func TestFitPanelClearsFullRectangle(t *testing.T) {
 }
 
 func TestContainerTransferFormDefaults(t *testing.T) {
+	t.Setenv("POMDOCK_WORKSPACES_DIR", filepath.Join(t.TempDir(), "workspaces"))
+	t.Setenv("PENTEST_LOOT_DIR", "")
 	m := newTUI()
 	m.openContainerTransferForm("client-a", transferDownload)
 	if !m.transferForm.active || !m.transferForm.source.Focused() {
 		t.Fatal("download form should open on the source field")
 	}
-	if got := m.transferForm.source.Value(); got != "/home/kali/pentest/" {
+	if got := m.transferForm.source.Value(); got != "/home/kali/workspace/" {
 		t.Fatalf("download source = %q", got)
 	}
-	if got := m.transferForm.destination.Value(); got != "~/pentest/client-a/" {
+	if got := m.transferForm.destination.Value(); got != defaultWorkspaceDir("client-a")+string(os.PathSeparator) {
 		t.Fatalf("download destination = %q", got)
 	}
 }
@@ -583,5 +585,15 @@ func TestDockerViewsFitTerminal(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestContainerTransferFormHonorsExactLegacyWorkspaceOverride(t *testing.T) {
+	custom := filepath.Join(t.TempDir(), "custom engagement")
+	t.Setenv("PENTEST_LOOT_DIR", custom)
+	m := newTUI()
+	m.openContainerTransferForm("client-a", transferDownload)
+	if got := m.transferForm.destination.Value(); got != custom+string(os.PathSeparator) {
+		t.Fatalf("download override = %q", got)
 	}
 }

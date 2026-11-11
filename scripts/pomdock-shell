@@ -1,34 +1,4 @@
 #!/usr/bin/env bash
-# Start the regular login shell inside a util-linux `script` recorder when the
-# caller identifies a Pomdock engagement. The child marker prevents recursion.
-
+# The image's system shell startup records each new terminal, including tmux panes.
 set -euo pipefail
-
-if [[ -z "${POMDOCK_ENGAGEMENT:-}" || "${POMDOCK_CAPTURE_ACTIVE:-}" == "1" ]]; then
-    exec zsh -l
-fi
-
-if ! command -v script >/dev/null 2>&1; then
-    printf 'pomdock: session recording unavailable: script(1) is missing\n' >&2
-    exec zsh -l
-fi
-
-session_dir="${POMDOCK_SESSION_DIR:-/home/kali/pentest/sessions}"
-umask 077
-mkdir -p -- "$session_dir"
-
-stamp="$(date -u +'%Y%m%dT%H%M%SZ')"
-stem="${stamp}-$$"
-export POMDOCK_CAPTURE_ACTIVE=1
-# Also set the variable the dotfiles zshrc's own fallback recorder guards on, so
-# it defers to this recorder instead of nesting a second script(1) inside it.
-export POMDOCK_CAPTURE="$stem"
-export POMDOCK_SESSION_LOG="${session_dir}/${stem}.log"
-
-exec script \
-    --quiet \
-    --flush \
-    --return \
-    --log-out "$POMDOCK_SESSION_LOG" \
-    --log-timing "${session_dir}/${stem}.timing" \
-    --command 'exec zsh -l'
+exec zsh -l

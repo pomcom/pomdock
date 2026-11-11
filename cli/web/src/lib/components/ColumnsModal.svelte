@@ -31,10 +31,10 @@
 </Modal>
 
 <style>
-  p { color: var(--subtext); margin: 0 0 12px; font-size: 12px; }
+  p { color: var(--pd-text-muted); margin: 0 0 12px; font-size: 0.75rem; }
   .presets { display: flex; gap: 8px; margin-bottom: 12px; }
   .row {
-    display: flex; gap: 8px; align-items: center; padding: 7px 0; color: var(--text);
-    border-bottom: 1px solid var(--surface0); cursor: pointer;
+    display: flex; gap: 8px; align-items: center; padding: 7px 0; color: var(--pd-text);
+    border-bottom: 1px solid var(--pd-surface); cursor: pointer;
   }
 </style>

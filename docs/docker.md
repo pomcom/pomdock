@@ -1,49 +1,83 @@
 # Docker containers
 
 ```bash
-pomdock docker build
-pomdock docker exec                                    # plain
-pomdock docker exec --vpn FILE                          # VPN kill switch
-pomdock docker exec --whonix                            # Tor
-pomdock docker exec --whonix --vpn FILE                 # Tor over VPN
-pomdock docker exec --name NAME --vpn FILE              # named engagement
-pomdock docker status
-pomdock docker stop [--name NAME]
-pomdock docker rm   [--name NAME]
-pomdock docker logs [--name NAME]
-pomdock docker burp
+pomdock docker build [--toolset full|minimal] [--fresh]
+pomdock docker exec acme --vpn ~/vpn/client.conf
+pomdock docker start tor-lab --route tor
+pomdock docker exec acme                         # recorded shell, reuse saved route
+pomdock docker attach acme                       # persistent tmux inside the container
+pomdock docker attach acme --window @1           # resume a specific window
+pomdock docker status [NAME]
+pomdock docker stop [NAME]
+pomdock docker rm NAME                          # keep loot
+pomdock docker rm NAME --purge                   # confirm deleting loot too
+pomdock docker logs [NAME]                      # container and VPN/Tor sidecar logs
+pomdock docker burp [NAME]
 ```
 
-`exec` is idempotent: it attaches if the container is running, restarts it if stopped,
-and builds and creates it if it does not exist. Switching network mode recreates the
-container automatically.
+All target commands accept a positional name or `--name NAME`. `attach` and `rm` require an
+explicit target. Other actions retain the default container when no name is given.
+`exec` starts/creates the container as needed and opens a recorded shell; `start`
+leaves it in the background. Named engagements keep separate loot and Atuin history
+in `~/pomdock/workspaces/NAME`, with their own sidecars.
+
+## Persistent terminals
+
+`pomdock docker attach NAME` resumes the container's tmux workspace, creating it on first
+use. Start the container first with `pomdock docker start NAME`. Windows and panes run
+inside that container; detaching leaves them running until the container stops.
+`pomdock docker exec NAME` remains a separate recorded shell without tmux.
+
+Use **Ctrl-b d** to detach, **Ctrl-b c** for a window, and **Ctrl-b %** or
+**Ctrl-b "** to split. Inside a default host tmux, press **Ctrl-b Ctrl-b** before
+the inner command key (for example, **Ctrl-b Ctrl-b d**). Ctrl-a remains readline's
+beginning-of-line shortcut. Host tmux settings are unchanged.
+
+Older host-managed Docker windows remain available as host terminals; they are
+never automatically moved or restarted. VM terminals and jobs still use host tmux.
+Container stop/recreation ends internal tmux processes; recordings persist in the
+workspace. Older images need rebuilding to provide `pomdock-tmux`.
 
 ## Network modes
 
-| Flags | Path |
+| Route | Setup |
 |---|---|
-| none | Docker bridge |
-| `--vpn FILE` | Kali → gluetun → VPN |
-| `--whonix` | Kali → Tor |
-| `--whonix --vpn FILE` | Kali → Tor → VPN |
+| `--route direct` | Docker bridge, without VPN/Tor sidecars |
+| `--route vpn --vpn FILE` | gluetun VPN |
+| `--route tor` | Tor gateway |
+| `--route tor-vpn --vpn FILE` | Tor gateway using gluetun's VPN network |
 
-The Kali container always shares the sidecar's network namespace, so a crashed or
-misconfigured tool cannot bypass the tunnel. `--vpn` accepts `.ovpn` (OpenVPN) or
-`.conf` (WireGuard) from any provider.
+`--vpn FILE` accepts WireGuard `.conf` and OpenVPN `.ovpn` profiles and implies
+VPN routing when `--route` is omitted. Legacy `--whonix` remains accepted for Tor.
+An omitted route reuses the existing container's labels and saved VPN profile;
+a new container defaults to direct networking. Stop a running container before
+changing routes. A stopped container is recreated with its loot preserved when
+the requested route changes. If a saved VPN profile moved, supply `--vpn` again.
 
-The route is recorded on the container (labels `io.pomdock.route` and
-`io.pomdock.vpn-file`), so a stopped engagement reconnects with just
-`pomdock docker exec --name NAME`: the same VPN config and/or Tor routing is reused.
-Passing `--vpn`/`--whonix` again overrides the recorded route. If the recorded config
-file has since moved, `exec` asks for `--vpn` explicitly.
+For HTB/THM, use direct networking and start OpenVPN **inside** Kali:
 
-## Named engagements
+```bash
+pomdock docker start hackthebox --route direct
+# Put the profile and any referenced files in ~/pomdock/workspaces/hackthebox/vpn/.
+pomdock docker exec hackthebox
+cd ~/workspace/vpn && sudo openvpn --config client.ovpn
+```
 
-`--name NAME` gives an engagement its own container, its own sidecars
-(`NAME-gluetun` / `NAME-whonix`), its own loot dir at `~/pentest/NAME`, and a separate
-Atuin history. Without `--name` everything lands in the default `~/pentest`.
+Full and minimal images include OpenVPN, `ip`, and TUN access. Run the VPN in
+one recorded terminal and tools in another. `--vpn FILE` instead creates a
+gluetun sidecar; it is a different workflow.
+
+If Docker's build resolver cannot reach package repositories while host DNS
+works, build with `POMDOCK_BUILD_NETWORK=host pomdock docker build`. This changes
+build networking only; engagement containers retain their selected route.
 
 ## Dotfiles
+
+The container prompt shows Berlin time when drawn, the instance, directory, and
+observed HTTPS exit IP. The IP refresh runs in the background with a 30-second
+cache; unavailable or stale results stay hidden. Set `POMDOCK_EXITIP=0` to disable
+the lookup. Recorder timestamps still capture command execution separately.
+Directory listing aliases retain colors but omit font-dependent file icons.
 
 `PENTEST_DOTFILES_DIR` (default `~/pcm.dot`) is mounted at `/home/kali/dotfiles` and
 symlinked to `~/pcm.dot` inside the container. Dotfiles are baked into the image at
@@ -57,8 +91,9 @@ on any Kali/Debian host.
 
 ## Burp Suite
 
-Burp runs natively on the host, not inside the container. `pomdock docker burp` prints
-the setup reminder. Wire it up in one of two directions depending on what you need.
+Start Burp natively on the host. `pomdock docker burp NAME` reports that engagement's
+running VPN proxy endpoint; it errors if unavailable and does not launch Burp.
+Use either proxy direction below as needed.
 
 ### Container → Burp (intercept the container's traffic)
 
@@ -97,11 +132,12 @@ upstream to gluetun (below) so Burp's egress follows the VPN.
 gluetun's HTTP proxy is published on `127.0.0.1:8888` (loopback only), so Burp reaches it
 on the host and its requests exit via the VPN. When several VPN engagements run at once,
 each one's gluetun takes the next free port (8888, 8889, …) instead of colliding; the exact
-port is printed when the sidecar comes up and by `pomdock docker burp --name <engagement>`.
+port is printed when the sidecar comes up and by `pomdock docker burp ENGAGEMENT`.
 
 ## Environment variables
 
 | Var | Default | Purpose |
 |---|---|---|
 | `PENTEST_DOTFILES_DIR` | `~/pcm.dot` | Dotfiles for build context and runtime mount |
-| `PENTEST_LOOT_DIR` | `~/pentest` | Loot directory |
+| `POMDOCK_WORKSPACES_DIR` | `~/pomdock/workspaces` | Host workspace root |
+| `PENTEST_LOOT_DIR` | unset | Legacy exact workspace override |

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,5 +69,47 @@ func TestIsRepoRootRequiresScriptsAndVMDirectory(t *testing.T) {
 	}
 	if isRepoRoot(root) {
 		t.Fatal("root without kali-vm identified as valid")
+	}
+}
+
+func TestDockerExecTargetForms(t *testing.T) {
+	for _, args := range [][]string{{"lab-kali"}, {"--name", "lab-kali"}} {
+		cmd := dockerExec()
+		if err := cmd.Flags().Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Args(cmd, cmd.Flags().Args()); err != nil {
+			t.Fatalf("target rejected: %v", err)
+		}
+	}
+	if got := containerDirectShellCommand("lab-kali"); got != "pomdock docker exec --name 'lab-kali'" {
+		t.Fatalf("wrong direct command: %s", got)
+	}
+}
+
+func TestReportCLIErrorPrintsWrappedExitContextAndPreservesStatus(t *testing.T) {
+	err := exec.Command("/bin/sh", "-c", "exit 23").Run()
+	if err == nil {
+		t.Fatal("expected subprocess failure")
+	}
+	for _, test := range []struct {
+		err     error
+		message string
+		status  int
+	}{
+		{err, "", 23},
+		{fmt.Errorf("cannot inspect storage pool fixture: %w", err), "cannot inspect storage pool fixture", 23},
+		{fmt.Errorf("invalid fixture input"), "invalid fixture input", 1},
+	} {
+		var output bytes.Buffer
+		if status := reportCLIError(test.err, &output); status != test.status {
+			t.Fatalf("exit status %d, want %d", status, test.status)
+		}
+		if test.message == "" && output.Len() != 0 {
+			t.Fatalf("bare script error duplicated: %s", output.String())
+		}
+		if test.message != "" && !strings.Contains(output.String(), test.message) {
+			t.Fatalf("wrapped context hidden: %s", output.String())
+		}
 	}
 }

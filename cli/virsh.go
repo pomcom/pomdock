@@ -170,31 +170,7 @@ func StopVM(name string) error     { _, err := virsh("shutdown", name); return e
 func ForceOffVM(name string) error { _, err := virsh("destroy", name); return err }
 
 func DeleteVM(name string) error {
-	_, _ = virsh("destroy", name)
-
-	// --remove-all-storage only works for storage libvirt itself manages
-	// (a storage pool volume). Our disks are plain qcow2 files created
-	// directly by the provisioning scripts, so libvirt refuses to touch
-	// them ("not managed by libvirt") — remove the disk file ourselves.
-	// --snapshots-metadata is required too: undefine otherwise refuses any
-	// domain with a snapshot, and every profile leaves a post-setup one.
-	if _, err := virsh("undefine", name, "--snapshots-metadata", "--nvram"); err != nil {
-		return err
-	}
-
-	disk := filepath.Join(imageDir, name+".qcow2")
-	if err := os.Remove(disk); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		// Disk is chown'd to libvirt-qemu at creation time, so a plain
-		// remove needs elevated rights. Only try non-interactively —
-		// this can run from the TUI, which has no terminal to prompt on.
-		if _, sudoErr := exec.Command("sudo", "-n", "rm", "-f", disk).CombinedOutput(); sudoErr != nil {
-			return fmt.Errorf("undefined '%s' but could not remove disk %s (owned by libvirt-qemu): remove it manually with sudo", name, disk)
-		}
-	}
-	return nil
+	return deleteVMWithRunner(name, runVMDeleteCommand)
 }
 
 func RevertSnapshot(name, snap string) error {
@@ -247,12 +223,30 @@ func slicesContainLine(output, want string) bool {
 }
 
 func CloneVM(src, dst string) error {
+	if src == dst || dst == "" || strings.ContainsAny(dst, "/\\\x00\r\n") {
+		return fmt.Errorf("clone must have a distinct valid instance name")
+	}
+	if VMExists(dst) {
+		return fmt.Errorf("VM %q already exists", dst)
+	}
+	profile := GuestProfileByID(GetVMProfileID(src))
+	customizer := ""
+	if profile.Family == "linux" {
+		var err error
+		customizer, err = exec.LookPath("virt-customize")
+		if err != nil {
+			return fmt.Errorf("Linux VM cloning requires virt-customize for the clone hostname; install libguestfs tools before cloning: %w", err)
+		}
+	}
 	cmd := exec.Command("virt-clone", "--connect", libvirtURI,
 		"--original", src, "--name", dst,
 		"--file", fmt.Sprintf("%s/%s.qcow2", imageDir, dst))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("virt-clone: %s", strings.TrimSpace(string(out)))
+	}
+	if customizer != "" {
+		return customizeCloneHostname(dst, customizer)
 	}
 	return nil
 }

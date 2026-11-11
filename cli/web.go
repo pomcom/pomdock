@@ -40,16 +40,11 @@ func webCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:     "web",
+		Args:    cobra.NoArgs,
 		Aliases: []string{"tracker", "report"},
 		Short:   "Web UI: activity tracker, recorded sessions, and container control",
-		Long: styleAccent.Render("pomdock web") + " — a local web UI for engagements and containers:\n\n" +
-			"  Tracker     atuin history as team-report rows; curation is saved per engagement\n" +
-			"  Sessions    recorded shell captures, searchable across commands and output\n" +
-			"  Containers  create, start, stop, recreate and remove pentest containers\n" +
-			"  Shells      open recorded container shells in the pomdock tmux workspace\n\n" +
-			styleMuted.Render("Binds 127.0.0.1 only. The printed URL carries a per-run login token;\n"+
-				"--token-file keeps one token (and the login) across restarts.\n"+
-				"Tracker curation is stored in <loot>/.pomdock/tracker.json."),
+		Long: "Open the local workspace for Tracker, recording search/replay and container control.\n" +
+			"Binds 127.0.0.1 only. Use --token-file to keep the browser login across restarts.",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return serveWeb(webOptions{engagement: name, tester: tester, port: port, open: !noOpen, tokenFile: tokenFile})
 		},
@@ -60,7 +55,10 @@ func webCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not auto-open the browser")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "read the login token from this file (created mode 0600 if missing)")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeEngagements)
-	cmd.AddCommand(reportImportCmd(), sessionRestoreCmd())
+	// Compatibility paths remain available; canonical commands live under sessions.
+	legacyImport, legacyRestore := reportImportCmd(), sessionRestoreCmd()
+	legacyImport.Hidden, legacyRestore.Hidden = true, true
+	cmd.AddCommand(legacyImport, legacyRestore)
 	return cmd
 }
 
@@ -70,11 +68,11 @@ func sessionRestoreCmd() *cobra.Command {
 	var into string
 	cmd := &cobra.Command{
 		Use:   "session-restore <file.tar.age>",
-		Short: "Decrypt an encrypted session archive and restore its captures",
-		Long: "Prompt for the passphrase, decrypt an age-encrypted session archive,\n" +
-			"and extract its capture files back into the engagement's sessions dir so\n" +
-			"the web UI lists them again. The passphrase is read from the terminal and\n" +
-			"never taken from arguments or the environment.",
+		Short: "Restore an encrypted session or engagement archive",
+		Long: "Prompt for the passphrase and restore an encrypted session or engagement.\n" +
+			"Engagement archives restore history, recordings and GUI edits into the loot\n" +
+			"directory; existing live history is never overwritten. The passphrase is\n" +
+			"read from the terminal, never arguments or the environment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			archivePath := args[0]
@@ -112,6 +110,9 @@ func defaultRestoreDir(archivePath string) string {
 		return filepath.Dir(archivePath)
 	}
 	encDir := filepath.Dir(abs) // .../encrypted
+	if filepath.Base(encDir) == "archives" {
+		return filepath.Dir(encDir)
+	}
 	if filepath.Base(encDir) == encryptedSubdir {
 		archiveDir := filepath.Dir(encDir) // .../.archive
 		if filepath.Base(archiveDir) == archiveSubdir {
@@ -138,12 +139,12 @@ func reportImportCmd() *cobra.Command {
 		Use:   "import <file>",
 		Short: "Import a pasted terminal scrollback as a searchable session",
 		Long: "Parse a pasted terminal log (starship ❯ prompts) into a session of\n" +
-			"commands + output, recover timestamps from the engagement's atuin history,\n" +
-			"and store it under the loot dir so the web UI can search and browse it.",
+			"commands and output. Recover available Atuin timestamps and save under\n" +
+			"the engagement loot directory for CLI and GUI search.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if name == "" {
-				return fmt.Errorf("--name <engagement> is required (see: pomdock web, engagement picker)")
+				return fmt.Errorf("--name <engagement> is required (see pomdock sessions list)")
 			}
 			sess, matched, err := importPastedLog(args[0], name, date)
 			if err != nil {
@@ -178,11 +179,13 @@ func completeEngagements(_ *cobra.Command, _ []string, _ string) ([]string, cobr
 }
 
 type webOptions struct {
-	engagement string
-	tester     string
-	port       int
-	open       bool
-	tokenFile  string // stable login token; empty = random per run
+	engagement   string
+	initialView  string
+	initialQuery string
+	tester       string
+	port         int
+	open         bool
+	tokenFile    string // stable login token; empty = random per run
 }
 
 type webServer struct {
@@ -222,16 +225,35 @@ func serveWeb(opts webOptions) error {
 		jobs:   newJobRunner(),
 	}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", port, srv.token)
-	if opts.engagement != "" {
-		url += "#/tracker?name=" + neturl.QueryEscape(opts.engagement)
-	}
+	url := webLaunchURL(port, srv.token, opts)
 	logOK("web UI serving at %s", styleAccent.Render(url))
 	logStep("the token in the URL logs the browser in; press Ctrl-C to stop")
 	if opts.open {
 		go openBrowser(url)
 	}
 	return http.Serve(ln, srv.handler())
+}
+
+func webLaunchURL(port int, token string, opts webOptions) string {
+	result := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", port, token)
+	view := opts.initialView
+	if view == "" && opts.engagement != "" {
+		view = "tracker"
+	}
+	if view == "" {
+		return result
+	}
+	params := neturl.Values{}
+	if opts.engagement != "" {
+		params.Set("name", opts.engagement)
+	}
+	if view == "sessions" {
+		params.Set("mode", "timeline")
+		if opts.initialQuery != "" {
+			params.Set("q", opts.initialQuery)
+		}
+	}
+	return result + "#/" + view + "?" + params.Encode()
 }
 
 func randomToken() string {
@@ -302,12 +324,22 @@ func (s *webServer) handler() http.Handler {
 	mux.HandleFunc("PUT /api/tracker", s.handleTrackerPut)
 	mux.HandleFunc("GET /api/prefs", s.handlePrefsGet)
 	mux.HandleFunc("PUT /api/prefs", s.handlePrefsPut)
+	mux.HandleFunc("GET /api/recordings/timeline", s.handleRecordingTimeline)
+	mux.HandleFunc("GET /api/recordings/search", s.handleRecordingSearch)
+	mux.HandleFunc("GET /api/recordings/info", s.handleRecordingReplay)
+	mux.HandleFunc("GET /api/recordings/cast", s.handleRecordingReplay)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	mux.HandleFunc("GET /api/session/source", s.handleSessionSource)
+	mux.HandleFunc("PUT /api/session/edits", s.handleSessionEdits)
+	mux.HandleFunc("PATCH /api/sessions", s.handleSessionsDelete)
 	mux.HandleFunc("POST /api/session/archive", s.handleSessionArchive)
 	mux.HandleFunc("POST /api/session/unarchive", s.handleSessionUnarchive)
 	mux.HandleFunc("POST /api/session/encrypt", s.handleSessionEncrypt)
 	mux.HandleFunc("GET /api/session/encrypted", s.handleEncryptedList)
+	mux.HandleFunc("GET /api/engagement/archives", s.handleEngagementArchives)
+	mux.HandleFunc("POST /api/engagement/archive", s.handleEngagementArchive)
+	mux.HandleFunc("POST /api/engagement/restore", s.handleEngagementArchive)
 	mux.HandleFunc("GET /api/logsearch", s.handleLogSearch)
 
 	// Container control (web_control.go).
@@ -319,7 +351,9 @@ func (s *webServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /api/containers/{name}", s.handleContainerRemove)
 	mux.HandleFunc("POST /api/containers/{name}/shell", s.handleContainerShell)
 	mux.HandleFunc("POST /api/containers/{name}/check/{tool}", s.handleContainerCheck)
+	mux.HandleFunc("GET /api/vms/connections", s.handleVMConnections)
 	mux.HandleFunc("GET /api/shells", s.handleShells)
+	mux.HandleFunc("POST /api/shells/{id}/focus", s.handleShellFocus)
 	mux.HandleFunc("DELETE /api/shells/{id}", s.handleShellClose)
 	mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleJob)
@@ -392,7 +426,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+			"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "+
 				"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -429,7 +463,7 @@ func (s *webServer) staticHandler() http.Handler {
 func (s *webServer) handleMeta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"version": version, "tester": s.opts.tester, "engagement": s.opts.engagement,
-		"workspace": workspaceSession,
+		"workspace": workspaceSession, "workspaceRoot": workspaceRoot(),
 	})
 }
 
@@ -462,9 +496,19 @@ func (s *webServer) handleRows(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, err)
 		return
 	}
-	rows, err := loadRows(db, s.opts.tester)
+	var rows []ReportRow
+	if _, statErr := os.Stat(db); statErr == nil {
+		rows, err = loadRows(db, s.opts.tester)
+	} else if !os.IsNotExist(statErr) {
+		err = statErr
+	}
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err)
+		return
+	}
+	rows, err = appendIndexedReportRows(r.Context(), name, s.opts.tester, rows)
+	if err != nil {
+		httpError(w, 503, err)
 		return
 	}
 	if rows == nil {
@@ -487,8 +531,14 @@ func (s *webServer) handleTrackerGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *webServer) handleTrackerPut(w http.ResponseWriter, r *http.Request) {
+	engagementDataMu.Lock()
+	defer engagementDataMu.Unlock()
 	name, ok := engagementParam(w, r)
 	if !ok {
+		return
+	}
+	if loot, err := lootDirForEngagement(name); err != nil || !hasLiveEngagementData(loot) {
+		httpError(w, 409, errors.New("restore this engagement before editing its tracker"))
 		return
 	}
 	p, err := trackerStatePath(name)
@@ -554,6 +604,15 @@ func (s *webServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, err)
 		return
 	}
+	state, err := readSessionEdits(name)
+	if err != nil {
+		httpError(w, 500, err)
+		return
+	}
+	for i := range sessions {
+		edit := state.Sessions[sessions[i].ID]
+		sessions[i].DisplayName, sessions[i].Deleted = edit.DisplayName, edit.Deleted
+	}
 	writeJSON(w, map[string]any{"sessions": sessions})
 }
 
@@ -576,6 +635,14 @@ func (s *webServer) handleSession(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, err)
 		return
 	}
+	if r.URL.Query().Get("original") != "1" {
+		state, err := readSessionEdits(name)
+		if err != nil {
+			httpError(w, 500, err)
+			return
+		}
+		sess = curateSession(sess, state)
+	}
 	writeJSON(w, sess)
 }
 
@@ -590,6 +657,8 @@ func (s *webServer) handleSessionUnarchive(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *webServer) moveSession(w http.ResponseWriter, r *http.Request, move func(string, string) error) {
+	engagementDataMu.Lock()
+	defer engagementDataMu.Unlock()
 	name, ok := engagementParam(w, r)
 	if !ok {
 		return
@@ -610,6 +679,8 @@ func (s *webServer) moveSession(w http.ResponseWriter, r *http.Request, move fun
 // the request body (loopback only, behind the CSRF guard) and returns the
 // archive filename. The plaintext is removed; restore is via the CLI.
 func (s *webServer) handleSessionEncrypt(w http.ResponseWriter, r *http.Request) {
+	engagementDataMu.Lock()
+	defer engagementDataMu.Unlock()
 	name, ok := engagementParam(w, r)
 	if !ok {
 		return
@@ -686,4 +757,25 @@ func openBrowser(url string) {
 		}
 	}
 	logWarn("could not find a browser opener; open %s manually", strings.TrimSpace(url))
+}
+
+func hasLiveEngagementData(loot string) bool {
+	if loot == "" {
+		return false
+	}
+	for _, rel := range []string{".atuin/history.db", ".pomdock/engagement.json", "sessions/commands.jsonl"} {
+		if fileExists(filepath.Join(loot, rel)) {
+			return true
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(loot, "sessions"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".log") || strings.HasSuffix(entry.Name(), ".json")) {
+			return true
+		}
+	}
+	return false
 }

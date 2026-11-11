@@ -1,70 +1,82 @@
-# Sessions & reporting
+# Recordings & Tracker
 
-Every shell opened via `pomdock docker exec` (or a Shells-tab window) is recorded with
-`script` into `~/pentest/<engagement>/sessions/`, on a host volume so recordings survive
-`docker rm`. Recording is armed by `POMDOCK_ENGAGEMENT` and handled by the image-owned
-`pomdock-shell` wrapper, so it does not depend on personal dotfiles and never fires on
-the host or in a plain `docker exec`. An image built before this wrapper was added must
-be rebuilt once with `pomdock docker build`.
+`pomdock docker exec NAME` and managed container terminals record interactive
+zsh/bash shells into the workspace's `sessions/` directory. Atuin remains enabled.
+The image-owned wrapper handles recording independently of personal dotfiles;
+plain `docker exec` does not enable it.
 
-## Tagging sub-sessions
-
-Inside a recorded shell, split a long capture into labelled sessions:
-
-```
-pomsession start recon      # begin a session tagged "recon"
-pomsession start exploit    # everything after this becomes a new "exploit" session
-pdsession recon             # short alias for the same thing
-pomsession help             # (or pomhelp) list the helpers and show recording state
-```
-
-Each `pomsession start` writes a marker the Sessions tab splits on, so one capture can
-hold several tagged sessions you filter by in the UI. It warns instead of tagging if the
-shell is not being recorded.
-
-## Browsing and exporting
+## Find and read commands
 
 ```bash
-pomdock web                                      # aliases: tracker, report
-pomdock web --name acme                          # open an engagement directly
-pomdock web import scrollback.txt --name acme    # import a pasted log
+pomdock sessions list                           # available engagements
+pomdock sessions list acme                      # recordings
+pomdock sessions logs acme                      # shell IDs
+pomdock sessions logs acme SHELL --clean        # readable complete transcript
+pomdock sessions search 'open' acme             # literal, case-sensitive search
+pomdock sessions search 'timeout|denied' --all --regex -i
+pomdock sessions show acme 'open'               # open timeline with search
+pomdock sessions import scrollback.txt --name acme
 ```
 
-Binds 127.0.0.1 only; the printed URL carries a per-run login token. `--token-file FILE`
-keeps one token across restarts (created 0600 if missing). Tabs:
+`logs NAME SHELL` without `--clean` prints the original terminal stream, including
+escape sequences. Search includes recorded commands, output and pasted imports.
+GUI edits and deletions apply by default; `--original` searches unedited content,
+including hidden items. `--archived` selects individual archived recordings;
+encrypted engagement packages must be restored before searching.
 
-- **Tracker**: the engagement's Atuin history as team-report rows, copyable as TSV.
-  Curation is saved to `<loot>/.pomdock/tracker.json`.
-- **Session history**: recorded captures and imported logs, searchable across commands and
-  output.
-- **Containers**: create, start, stop, recreate, and remove pentest containers.
-- **Terminals**: existing shell windows in the pomdock tmux workspace. Open a new
-  container terminal from Containers; its recording appears in Session history.
+Inside a recorded shell, `pdsession recon` (or `pomsession start recon`) starts a
+labelled section without interrupting recording. `help` shows recording state,
+networking commands and RDP helpers.
 
-The navigation and recording list collapse independently. Drag the list divider
-(or focus it and use arrow keys, Home, or End) to resize it between 260–300px.
-Layout settings and session display names use local pomdock preferences. Rename
-changes the display name only; the recording ID and captured history stay intact.
+## Work in the GUI
 
-Filter recordings by name, date, or tag. Search explicitly targets the current
-session or all non-archived recordings in the selected engagement. Enter and
-Shift+Enter navigate matches. Histories render 100 executions per page; search
-jumps to the page containing its match. Collapsed output previews never truncate
-what the copy button copies. Recording IDs, archive, restore, and encryption
-actions are available under Details; archive/encrypt affects the entire capture,
-including its tagged sections.
+`pomdock web` opens the local workspace. It binds only to 127.0.0.1; the printed URL
+logs the browser in. `--token-file FILE` preserves login across restarts.
 
-**Open capture** means no end marker was recorded, including captures interrupted
-without a clean shutdown. It does not prove the terminal is live. Open captures
-refresh every three seconds while the page is visible. Scrolling back pauses
-following; **Follow output** resumes at the latest execution. Completed segments
-and captures show **Ended**. Container identity, command exit status, and duration
-are unavailable in the existing transcript format and are not inferred.
+- **Session history**: search the engagement-wide timeline, select a command or hit,
+  and replay its original shell at that moment. Literal/regex and case controls
+  apply to the selected live or archived scope. Full-screen search uses terminal
+  snapshots; replay retains the original stream.
+- **Recordings & edits**: rename recordings, edit command/output text, and hide noise.
+  Select entries, Shift-click a range, or select matching entries across pages for
+  bulk deletion. **Show deleted** restores hidden items; **Restore original** resets
+  edits. Copy output includes its complete contents, even when previewed collapsed.
+- **Tracker**: edit engagement history for copying into an external tracker.
+  Row selection controls bulk actions; Export checkboxes independently control TSV
+  inclusion. Completed indexed commands absent from Atuin are included when known.
+- **Containers / Terminals**: manage containers and enter their per-container tmux
+  sessions. VM terminals and jobs use the shared workspace.
 
-## How reading a recording works
+Names, edits and deletions live under `<loot>/.pomdock/`; originals and Atuin are
+preserved. Replay always shows the original stream, which can differ from edited
+text. Missing timestamps, exit codes and command boundaries remain unknown.
+An open capture means no end marker was recorded; it does not prove a live shell.
 
-A raw `script` log is full of the line editor's redraw noise. Opening a recording
-reconstructs each typed command (replaying `\r`, `\b`, and cursor moves), splits the
-transcript at `pomsession` markers, and timestamps each command from the engagement's
-Atuin history. Full-screen TUIs (less, htop) render imperfectly; imported pasted logs
-have best-effort timestamps.
+## Archive and restore
+
+**Archive & encrypt** bundles recordings, indexes, Atuin, Tracker and GUI edits into
+one `<loot>/archives/*.tar.age` file. Stop engagement containers first. The verified
+package replaces live history; unrelated loot stays in place. Archives remain
+visible in the GUI and can be restored with the passphrase. CLI restoration:
+
+```bash
+pomdock sessions restore /path/to/acme.tar.age
+```
+
+Restoring never overwrites existing live history. Individual recording archives keep
+their `.log`, `.timing`, `.start` and command-index sidecars together.
+
+## Runtime
+
+Current images write timed terminal captures and a version-2 structured command
+index. To upgrade older containers, rebuild the image and recreate containers while
+preserving loot. Legacy recordings remain available in **Recordings & edits**;
+exact metadata cannot be added retroactively.
+
+The host needs Python 3.11+. Processing modules and replay assets are bundled;
+there are no runtime downloads. Disposable derived caches live in
+`.pomdock/cache/recordings/`.
+
+Workspace data defaults to `~/pomdock/workspaces/NAME` on the host and `~/workspace`
+in the container. `~/pentest` remains a compatibility alias; recorded paths are
+kept as originally captured.

@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// workspaceSession is the detached tmux session that holds persistent shells,
-// VM provisioning jobs and FreeRDP windows. The TUI itself runs directly in
-// the caller's terminal and only attaches to this session on demand.
+// workspaceSession holds VM shells, provisioning jobs and FreeRDP windows.
+// New Docker shells use tmux inside their container. Legacy host terminals stay
+// in their existing sessions; the TUI attaches to host workspaces on demand.
 const workspaceSession = "pomdock"
 
 // returnToDashboardScript is appended to job scripts that finish inside a
@@ -57,24 +57,17 @@ func newWorkspaceWindow(name, command string) (string, error) {
 	return windowID, nil
 }
 
-// styleWorkspaceStatus marks the active window's tab with its network route
-// colour (the @pomdock_route window option set on each container shell), matching
-// the pane-border colours: green vpn, red direct, magenta tor, cyan tor-vpn.
-// It leaves the status bar itself in the user's own theme — an earlier version
-// painted the whole bar in the route colour, which made the window list
-// unreadable. Scoped to the pomdock session, so other tmux sessions are
-// untouched; the route is also shown on the pane border, so this is only an
-// at-a-glance accent.
+// styleWorkspaceStatus removes Pomdock's old status colour overrides. The bar
+// and window tabs inherit the user's theme; route colours stay on pane borders.
 func styleWorkspaceStatus() {
-	route := "#{@pomdock_route}"
-	bg := "bg=#{?#{==:" + route + ",vpn},green," +
-		"#{?#{==:" + route + ",direct},red," +
-		"#{?#{==:" + route + ",tor},magenta," +
-		"#{?#{==:" + route + ",tor-vpn},cyan,blue}}}}"
-	// Restore the bar to the user's theme, then colour only the current tab.
 	_ = exec.Command("tmux", "set-option", "-u", "-t", workspaceSession, "status-style").Run()
-	_ = exec.Command("tmux", "set-option", "-t", workspaceSession,
-		"window-status-current-style", bg+",fg=black,bold").Run()
+	out, err := exec.Command("tmux", "list-windows", "-t", workspaceSession, "-F", "#{window_id}").Output()
+	if err != nil {
+		return
+	}
+	for _, windowID := range strings.Fields(string(out)) {
+		_ = exec.Command("tmux", "set-option", "-wu", "-t", windowID, "window-status-current-style").Run()
+	}
 }
 
 func setWindowOptions(windowID string, options map[string]string) error {
@@ -87,10 +80,6 @@ func setWindowOptions(windowID string, options map[string]string) error {
 	return nil
 }
 
-// attachWorkspaceWindowCommand returns the tmux command that shows windowID in
-// the user's terminal. Outside tmux it attaches to the workspace session and
-// returns when the user detaches (Ctrl-b d). Inside tmux it switches the
-// current client to the workspace session; Ctrl-b L switches back.
 // insideTmux reports whether the TUI itself runs inside a tmux client.
 func insideTmux() bool { return os.Getenv("TMUX") != "" }
 
@@ -102,12 +91,14 @@ func returnHint() string {
 	return "Ctrl-b d returns here"
 }
 
+// Attach directly to the window target, so tmux resolves its owning session.
+// Inside tmux switch the existing client instead of nesting a second client.
 func attachWorkspaceWindowCommand(windowID string) *exec.Cmd {
 	args := []string{"select-window", "-t", windowID, ";"}
 	if insideTmux() {
-		args = append(args, "switch-client", "-t", "="+workspaceSession)
+		args = append(args, "switch-client", "-t", windowID)
 	} else {
-		args = append(args, "attach-session", "-t", "="+workspaceSession)
+		args = append(args, "attach-session", "-t", windowID)
 	}
 	cmd := exec.Command("tmux", args...)
 	cmd.Env = usableTerminalEnv(os.Environ())

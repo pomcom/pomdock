@@ -6,7 +6,7 @@ set -euo pipefail
 command_name="$(basename "$0")"
 if [[ "$command_name" == "pdsession" ]]; then
     set -- start "$@"
-elif [[ "$command_name" == "pomhelp" ]]; then
+elif [[ "$command_name" == "pomhelp" || "$command_name" == "help" ]]; then
     set -- help "$@"
 fi
 
@@ -19,12 +19,12 @@ Usage:
 
 Short forms:
   pdsession TAG          same as: pomsession start TAG
-  pomhelp                same as: pomsession help
+  help                   Pomdock commands, networking and RDP reference
 EOF
 }
 
 case "${1:-help}" in
-    start)
+    start|new)
         shift
         tag="${*:-}"
         if [[ -z "$tag" ]]; then
@@ -50,6 +50,9 @@ case "${1:-help}" in
         fi
         ;;
     help|-h|--help)
+        if command -v pomdock-help >/dev/null 2>&1; then
+            exec pomdock-help
+        fi
         usage
         ;;
     *)

@@ -25,11 +25,18 @@ pomdock vm rdp NAME
 pomdock vm console NAME
 pomdock vm finalize NAME    # after a manual Windows install
 pomdock vm reset NAME       # revert to the post-setup snapshot
-pomdock vm clone / delete / ip NAME
+pomdock vm clone SOURCE NEWNAME
+pomdock vm delete NAME
+pomdock vm ip NAME
 pomdock vm whonix-gateway
 pomdock vm whonix-attach NAME
 pomdock vm whonix-detach NAME
 ```
+
+The web GUI's **Terminals → VM connections** section offers copyable RDP commands
+for VMs with an assigned Pomdock profile, including their detected IP and profile
+user. Unknown addresses and unsupported profiles show a reason instead of a guessed
+command. Viewing or copying never starts a VM or opens RDP.
 
 ## Profiles
 
@@ -61,6 +68,12 @@ a `post-setup` snapshot you can return to with `pomdock vm reset`.
 Ubuntu, Debian, and Rocky download the official cloud image (checksum verified), inject
 your SSH key via cloud-init, install the QEMU guest agent, and snapshot `post-setup`.
 No dotfiles, no pentest tools.
+
+New Linux guests use the instance name as hostname, normalized to a lowercase
+DNS label (`Lab_VPN` becomes `lab-vpn`). Cloning a guest with a Linux profile
+sets the new hostname offline using `virt-customize`; the source stays unchanged.
+Login usernames stay profile-specific. Windows and unassigned-profile clones
+retain their existing hostname behavior.
 
 ## Windows
 
