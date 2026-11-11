@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKER = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 from pathlib import Path
 p=Path(os.environ['FIXTURE_STATE']); s=json.loads(p.read_text()); a=sys.argv[1:]
 with Path(os.environ['FIXTURE_CALLS']).open('a') as f: f.write(json.dumps(a)+'\n')
@@ -61,6 +61,9 @@ elif a[0]=='logs': print('Bootstrapped 100% (done): Done\nPublic IP address is 1
 elif a[0]=='port': print('127.0.0.1:8888')
 elif a[0]=='exec':
  if os.environ.get('FIXTURE_FAIL_EXEC'): fail()
+ if os.environ.get('FIXTURE_CONTAINER_HOME') and a[2:4]==['bash','-c']:
+  env=dict(os.environ,HOME=os.environ['FIXTURE_CONTAINER_HOME'])
+  sys.exit(subprocess.run(a[2:],env=env).returncode)
 else: fail()
 '''
 
@@ -131,6 +134,38 @@ class LifecycleTests(unittest.TestCase):
         p = self.run_backend('start')
         self.assertIn('route: vpn', p.stdout)
         self.assertEqual(json.loads(self.state.read_text())['eng']['labels']['io.pomdock.route'], 'vpn')
+
+    def dotfiles_home(self):
+        repository = Path(self.env['PENTEST_DOTFILES_DIR'])
+        repository.mkdir()
+        (repository / 'keep.txt').write_text('original dotfiles')
+        home = self.root / 'container home'
+        home.mkdir()
+        (home / 'dotfiles').symlink_to(repository, target_is_directory=True)
+        self.env['FIXTURE_CONTAINER_HOME'] = str(home)
+        self.state.write_text('{}')
+        return home, repository
+
+    def test_repeated_start_keeps_dotfiles_alias_out_of_mounted_repository(self):
+        home, repository = self.dotfiles_home()
+        self.run_backend('start')
+        self.assertEqual((home / 'pcm.dot').readlink(), home / 'dotfiles')
+        self.run_backend('stop')
+        self.run_backend('start')
+        self.assertEqual((home / 'pcm.dot').readlink(), home / 'dotfiles')
+        self.assertEqual(sorted(path.name for path in repository.iterdir()), ['keep.txt'])
+        self.assertEqual((repository / 'keep.txt').read_text(), 'original dotfiles')
+
+    def test_dotfiles_alias_preserves_an_existing_real_directory(self):
+        home, repository = self.dotfiles_home()
+        existing = home / 'pcm.dot'
+        existing.mkdir()
+        (existing / 'keep.txt').write_text('existing user directory')
+        self.run_backend('start')
+        self.assertFalse(existing.is_symlink())
+        self.assertEqual(sorted(path.name for path in existing.iterdir()), ['keep.txt'])
+        self.assertEqual((existing / 'keep.txt').read_text(), 'existing user directory')
+        self.assertEqual(sorted(path.name for path in repository.iterdir()), ['keep.txt'])
 
     def test_running_profile_change_rejected(self):
         self.set_state('vpn')
