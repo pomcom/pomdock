@@ -40,9 +40,9 @@ USER kali
 WORKDIR /home/kali/workspace
 CMD ["zsh"]
 DOCKERFILE
-args=(-f "$context_dir/Dockerfile" -t "$output_image" --network none)
-if docker buildx version >/dev/null 2>&1; then
-    docker buildx build "${args[@]}" --load "$context_dir"
-else
-    DOCKER_BUILDKIT=0 docker build "${args[@]}" "$context_dir"
-fi
+# Build with the classic (BuildKit-less) builder. The Dockerfile pins the exact
+# local base image with `FROM <sha256:…>`, which buildx's default "docker" driver
+# cannot resolve: it treats the bare digest as a registry reference and fails with
+# "pull access denied". The classic builder reads it straight from the local image
+# store. `--network none` keeps the added layer offline.
+DOCKER_BUILDKIT=0 docker build -f "$context_dir/Dockerfile" -t "$output_image" --network none "$context_dir"
